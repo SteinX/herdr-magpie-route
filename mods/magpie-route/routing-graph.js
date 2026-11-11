@@ -378,11 +378,24 @@ function targetPresentation(env, target, width, pinned) {
   const providerIcon = providerIconPath(target.provider);
   const detailText = [provider, effort, target.seatOrdinal ? env.msg("graph.target.seat", { seat: env.number(target.seatOrdinal) }) : ""].filter(Boolean).join(" · ");
   const stateText = outcome(env, target, pinned);
+  const metric = env.cache?.models?.get(tuple([target.provider, target.model]));
+  const cacheText = env.msg("graph.target.cacheHit", {
+    value: metric && finite(metric.rate)
+      ? env.msg("graph.target.cacheRate", { rate: (metric.rate * 100).toFixed(2) })
+      : env.msg("graph.unreported"),
+  });
+  const cacheTooltip = [cacheText, env.msg("graph.target.cacheScope"), metric
+    ? env.msg("graph.target.cacheTokens", { read: env.number(metric.cacheRead), total: env.number(metric.total) })
+    : env.msg("graph.target.cacheUnreported"),
+    metric && metric.cacheUnknown > 0 ? env.msg("graph.target.cacheUnknown", { unknown: env.number(metric.cacheUnknown) }) : "",
+  ].filter(Boolean).join("\n");
   const title = wrapped(model, width - 20 - (modelIcon ? 20 : 0), 12);
   const detail = wrapped(detailText, width - 20 - (providerIcon ? 17 : 0), 11);
   const state = wrapped(stateText, width - 29, 10);
-  return { title, detail, state, modelIcon, providerIcon, height: Math.max(68, 26 + title.lines * 15 + detail.lines * 14 + state.lines * 13),
-    tooltip: [env.msg(target.kind === "candidate" ? "graph.target.candidateModel" : "graph.target.actualModel", { model }), detailText, stateText,
+  const cache = wrapped(cacheText, width - 20, 10);
+  return { title, detail, state, cache, modelIcon, providerIcon,
+    height: Math.max(87, 32 + title.lines * 15 + detail.lines * 14 + state.lines * 13 + cache.lines * 13),
+    tooltip: [env.msg(target.kind === "candidate" ? "graph.target.candidateModel" : "graph.target.actualModel", { model }), detailText, stateText, cacheTooltip,
       target.observed ? env.msg("graph.target.observedCounts", {
         attempts: env.msg("graph.target.observedAttempts", { count: target.attemptCount }),
         requests: env.msg("graph.source.requests", { count: target.requestCount }),
@@ -422,7 +435,8 @@ function targetNode(env, target, presentation, x, y, width, index) {
       .child(label(presentation.detail.value, env.t.muted, 11, 14).flex_1()))
     .child(h_flex().w_full().min_w(0).items_center().gap(5)
       .child(div().size(4).flex_none().rounded(2).bg(color))
-      .child(label(presentation.state.value, color, 10, 13).flex_1()));
+      .child(label(presentation.state.value, color, 10, 13).flex_1()))
+    .child(label(presentation.cache.value, env.t.muted, 10, 13));
 }
 
 function pointOnCurve(curve, t) {

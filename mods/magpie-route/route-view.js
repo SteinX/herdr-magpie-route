@@ -225,6 +225,46 @@ function header(env, live) {
       }).flex_1()));
 }
 
+function usageSummary(env) {
+  const { view, msg } = env;
+  const usage = view.usage;
+  const metric = usage?.overall;
+  const reported = finite(metric?.total) && metric.total > 0 && finite(metric?.rate)
+    && metric.rate >= 0 && metric.rate <= 1;
+  const panel = v_flex().w_full().min_w(0).flex_none().p(12).gap(7).rounded(10)
+    .border(1).border_color(env.t.border).bg(env.t.chrome)
+    .child(section(env, msg("ui.usage.title"), null,
+      button(env, "usage-refresh", msg(view.usageBusy ? "ui.usage.reading" : "ui.header.refresh"),
+        cx => view.refreshUsage(cx), { disabled: view.usageBusy, accessible: msg("ui.usage.refreshAccessible") })))
+    .child(line(env, msg("ui.usage.scope"), env.t.muted).text_size(10))
+    .child(line(env, reported ? msg("ui.usage.rate", {
+      value: (metric.rate * 100).toFixed(2),
+    }) : msg("ui.usage.notReported"), reported ? env.t.foreground : env.t.muted).font_medium().text_size(14).tooltip(msg("ui.usage.coverage")));
+  if (metric && finite(metric.cacheRead) && finite(metric.total)) {
+    panel.child(line(env, msg("ui.usage.tokens", {
+      read: env.number(metric.cacheRead), total: env.number(metric.total),
+    }), env.t.muted).text_size(11));
+    if (metric.total === 0) panel.child(line(env, msg("ui.usage.noEligibleTokens"), env.t.muted).text_size(10));
+  }
+  if (finite(metric?.cacheUnknown) && metric.cacheUnknown > 0) {
+    panel.child(line(env, msg("ui.usage.unknownExcluded", { count: env.number(metric.cacheUnknown) }), env.t.muted).text_size(10));
+  }
+  if (usage) {
+    panel.child(line(env, msg("ui.usage.since", {
+      time: scalar(usage.since) ? safeText(env, env.date(usage.since)) : msg("ui.notReported"),
+    }), env.t.muted).text_size(10));
+    if (finite(usage.calls)) panel.child(line(env, msg("ui.usage.calls", { count: env.number(usage.calls) }), env.t.muted).text_size(10));
+  }
+  if (view.usageError) {
+    panel.child(line(env, msg("ui.usage.error", { message: safeText(env, view.usageError) }), env.t.blocked).text_size(11));
+  } else if (view.usageBusy && !usage) {
+    panel.child(line(env, msg("ui.usage.loading"), env.t.muted).text_size(11));
+  } else if (!usage) {
+    panel.child(line(env, msg("ui.usage.empty"), env.t.muted).text_size(11));
+  }
+  return panel;
+}
+
 
 function accountLabel(env, candidate, index) {
   if (!candidate) return env.msg("ui.account.notReported");
@@ -285,6 +325,82 @@ function ruleView(env, rule) {
     body.child(line(env, env.msg("ui.rule.noMatch"), env.t.muted).text_size(11));
   }
   return body;
+}
+
+function classificationText(env, value, limit = 160) {
+  const text = safeText(env, value);
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+function classifierScore(env, value) {
+  return finite(value) && value >= 0 && value <= 3
+    ? env.msg("ui.classifier.scoreValue", { value: env.number(value) }) : env.msg("ui.notReported");
+}
+
+
+function classifierView(env, classifier) {
+  const body = v_flex().w_full().min_w(0).gap(9);
+  if (!classifier) return body.child(line(env, env.msg("ui.notReported"), env.t.muted).text_size(11));
+  if (classifier.failed === true) body.child(line(env, env.msg("ui.classifier.failed"), env.t.blocked).text_size(11));
+  const flag = value => env.msg(value === true ? "ui.classifier.yes" : value === false ? "ui.classifier.no" : "ui.notReported");
+  const intents = list(classifier.intents).map(value => classificationText(env, value));
+  return body
+    .child(field(env, env.msg("ui.classifier.model"), classificationText(env, classifier.by), false, modelIconPath(classifier.by)))
+    .child(field(env, env.msg("ui.classifier.intent"), classificationText(env, classifier.intent)))
+    .child(field(env, env.msg("ui.classifier.effort"), classificationText(env, classifier.effort)))
+    .child(field(env, env.msg("ui.classifier.score"), classifierScore(env, classifier.score)))
+    .child(field(env, env.msg("ui.classifier.confidence"), finite(classifier.sure) && classifier.sure >= 0 && classifier.sure <= 1
+      ? env.msg("ui.classifier.confidenceValue", { value: (classifier.sure * 100).toFixed(1) }) : env.msg("ui.notReported")))
+    .child(field(env, env.msg("ui.classifier.latency"), duration(env, classifier.ms)))
+    .child(field(env, env.msg("ui.classifier.decisionReuse"), flag(classifier.cached)))
+    .child(line(env, env.msg("ui.classifier.reuseNote"), env.t.muted).text_size(10))
+    .child(field(env, env.msg("ui.classifier.previousIntent"), classificationText(env, classifier.after)))
+    .child(field(env, env.msg("ui.classifier.previousEffort"), classificationText(env, classifier.afterEffort)))
+    .child(field(env, env.msg("ui.classifier.parentEffort"), classificationText(env, classifier.above)))
+    .child(field(env, env.msg("ui.classifier.intents"), intents.length ? intents.join(env.msg("ui.listSeparator")) : env.msg("ui.notReported")))
+    .child(field(env, env.msg("ui.classifier.fallbackPolicy"), classificationText(env, classifier.fallback)));
+}
+
+function classifierSection(env, routes, selected) {
+  let route = selected;
+  if (!route) {
+    let latestTime = NaN;
+    for (const candidate of routes) {
+      if (!candidate.classifier) continue;
+      const time = Date.parse(candidate.time);
+      if (!route || (finite(time) && (!finite(latestTime) || time > latestTime))) {
+        route = candidate;
+        latestTime = time;
+      }
+    }
+  }
+  const classifier = route?.classifier;
+  const expanded = env.view.classifierExpanded === true;
+  const summary = classifier ? env.msg("ui.classifier.summary", {
+    model: classificationText(env, classifier.by, 64),
+    effort: classificationText(env, classifier.effort, 32),
+    score: classifierScore(env, classifier.score),
+  }) : env.msg("ui.notReported");
+  const context = route ? env.msg(selected ? "ui.classifier.selectedContext" : "ui.classifier.latestContext", {
+    id: classificationText(env, route.id, 48), time: safeText(env, env.date(route.time)),
+  }) : env.msg("ui.classifier.emptyContext");
+  const icon = modelIconPath(classifier?.by);
+  return v_flex().w_full().min_w(0).flex_none().p(12).gap(7).rounded(10)
+    .border(1).border_color(env.t.border).bg(env.t.chrome)
+    .child(h_flex().w_full().min_w(0).items_center().gap(8)
+      .child(v_flex().min_w(0).flex_1().gap(4)
+        .child(line(env, env.msg("ui.classifier.title")).font_semibold().text_size(13))
+        .child(h_flex().w_full().min_w(0).items_center().gap(5)
+          .when(Boolean(icon), el => el.child(brandIcon(icon, 12)))
+          .child(clipped(env, summary, env.t.muted).text_size(10).flex_1())))
+      .child(button(env, "classifier-toggle", env.msg(expanded ? "ui.classifier.collapse" : "ui.classifier.expand"),
+        cx => env.view.toggleClassifier(cx), {
+          kind: "quiet", selected: expanded,
+          accessible: env.msg(expanded ? "ui.classifier.collapseAccessible" : "ui.classifier.expandAccessible"),
+        }).flex_none()))
+    .child(clipped(env, context, env.t.muted).text_size(10).w_full())
+    .when(expanded, el => el.child(v_flex().w_full().min_w(0).pt(9).border_t(1).border_color(env.t.border)
+      .child(classifierView(env, classifier))));
 }
 
 function details(env, route) {
@@ -556,7 +672,7 @@ export function renderRouting(view, cx) {
     done: colors.done ?? colors.accent,
     blocked: colors.blocked ?? colors.foreground,
   };
-  const env = { ...view.i18n, view, t, masked: view.masked !== false,
+  const env = { ...view.i18n, view, t, masked: view.masked !== false, cache: view.usage,
     identities: privacyValues(view, routes), width: finite(view.graphWidth) && view.graphWidth > 0 ? view.graphWidth : 420,
     animate: view.connection === "live" && view.motion === true };
   const headerNode = header(env, live);
@@ -575,9 +691,11 @@ export function renderRouting(view, cx) {
   } else if (view.connection === "connecting" && routes.length === 0) {
     content.child(notice(env, env.msg("ui.notice.connecting"), env.msg("ui.notice.awaitingRequests")));
   }
+  content.child(usageSummary(env));
   content.child(renderRoutingGraph(env, routes, selected));
   content.child(requests(env, env.msg("ui.requests.active"), live, env.msg("ui.requests.noneActive")));
   content.child(quotas(env));
+  content.child(classifierSection(env, routes, selected));
   content.child(recentRequests(env, recent));
   const root = v_flex().id("magpie-routing").size_full().min_w(0).min_h(0).bg(t.surface)
     .text_color(t.foreground).text_size(12).line_height(1.4)

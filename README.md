@@ -12,6 +12,8 @@ Recorded from real gateway requests, with moving points on active paths and dist
 
 - Follow the current local OMP session or inspect all retained gateway requests.
 - See actual model destinations, effort, candidate branches and live native flow animation.
+- Read overall and per-model input-cache hit rates, shown to two decimal places from all recorded Magpie Usage data.
+- Expand the compact classifier section above recent requests to inspect model, intent, difficulty, confidence, latency and decision reuse.
 - Inspect request attempts and routing details; preview three recent requests or expand into five-request pages.
 - View global account quotas, remaining capacity, reset times and cached readings.
 - Distinguish model-family icons from upstream-provider icons.
@@ -21,7 +23,7 @@ Recorded from real gateway requests, with moving points on active paths and dist
 ## Requirements
 
 - Herdr App, verified with **0.1.15**, with native path painting and frame animation support. This is a Herdr mod, not an npm package or browser extension.
-- A running local Magpie gateway exposing the trace and quota APIs listed below. The earliest compatible Magpie release has not been established.
+- A running local Magpie gateway exposing the trace, usage and quota APIs listed below. The earliest compatible Magpie release has not been established.
 - For current-session binding: a local OMP process, Python 3, `hc` and `lsof`. The resolver uses Python's standard library.
 
 macOS is the verified platform. Linux has not been validated; Windows session binding is not supported by the current Unix process/file discovery code. Global request browsing does not require successful OMP session binding.
@@ -74,6 +76,10 @@ Choose a local OMP tab for **Current session**, or select **All requests** to br
 
 Click a request to expand its details and pin its route. Recent history starts with three rows; **Show all** enables five rows per page. Filtering resets the page. Global-history pagination survives changing the active terminal tab.
 
+Input-cache statistics use `usage?period=all` and refresh every 30 seconds or on demand. They cover all recorded Magpie Usage, including direct, reported and classifier calls, independently of session/model filters. Overall hit rate is token-weighted: `cache_read / (input + cache_read + cache_write - cache_unknown)`. The model cards use the same ledger grouped by provider/model across efforts and accounts. Unknown cache input is excluded; no eligible tokens or unavailable readings show “Not reported”. Rates retain two decimal places, including `0.00%` and `100.00%` when known.
+
+The classifier section sits between account quotas and recent requests and starts collapsed. It shows the selected request's classifier, or the latest reported classification in the current routing scope when nothing is selected. Expand it for full metadata. Previous intent/effort are context, parent-group effort is inherited, and decision reuse is separate from input-token cache hits. Missing values remain unknown; raw classifier errors are not retained.
+
 The language button shows **中文** in English and **EN** in Chinese. It changes only the mod's language. Account-identity visibility and motion are separate controls. All controls retain native keyboard focus behavior.
 
 Quotas are global: changing session or model filters does not narrow the quota cards. Automatic reads use gateway cache; **Refresh quotas** explicitly asks the gateway to refresh provider readings. Unknown quota is never displayed as zero usage.
@@ -85,10 +91,11 @@ Native mod commands `magpie-route.refresh` and `magpie-route.locale` can also be
 The mod:
 
 - Reads only the gateway port from `~/.config/magpie/settings.json`, defaulting to 3425.
-- Uses loopback HTTP at `127.0.0.1:<port>/v1/magpie/`: `GET trace?after=…`, `GET quotas?kept=1`, and explicit `POST quotas/refresh`.
+- Uses loopback HTTP at `127.0.0.1:<port>/v1/magpie/`: `GET trace?after=…`, `GET usage?period=all`, `GET quotas?kept=1`, and explicit `POST quotas/refresh`.
 - Runs `python3`, `hc get --json` and `lsof` to bind a local terminal's foreground OMP process to its uniquely open root session.
 - Reads at most 16 KiB / four leading lines of candidate session files under `~/.omp/agent/sessions`; it does not scan full conversation history.
 - Retains a narrowed set of routing fields rather than full trace prompt metadata. Account names are masked by default. Provider-supplied raw text keeps its original language.
+- Reduces Usage responses immediately to aggregate/model counters and the recording start; session, account, key and file-path fields are discarded.
 
 The request list is the gateway's recent cache, not a complete session archive. No telemetry or external icon downloads occur at runtime. This repository contains no user settings, account credentials, session files or personal layouts. The preview is a redacted capture of the native panel.
 

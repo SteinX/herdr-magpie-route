@@ -1,6 +1,6 @@
 import { View } from "gpui-kit";
 import { appHome, exec, focused, home, layout, nextCommand, panes, readTextFile, spaces, terminals } from "herdr";
-import { emptyTrace, filterRoutes, readQuotas, readTrace } from "./routing-data.js";
+import { emptyTrace, filterRoutes, readQuotas, readTrace, readUsage } from "./routing-data.js";
 import { renderRouting } from "./route-view.js";
 import { createI18n, messageError } from "./i18n.js";
 
@@ -8,6 +8,7 @@ const PANEL = "magpie-route-panel";
 const DEFAULT_PORT = 3425;
 const REBIND_MS = 5000;
 const QUOTA_MS = 30000;
+const USAGE_MS = 30000;
 const nonempty = value => typeof value === "string" && value.trim().length > 0;
 
 function shown(node, hidden = false) {
@@ -58,11 +59,17 @@ export default class MagpieRoute extends View {
     this.quotasUpdated = null;
     this.quotaError = null;
     this.lastQuota = 0;
+    this.usage = null;
+    this.usageJob = null;
+    this.usageBusy = false;
+    this.usageError = null;
+    this.lastUsage = 0;
     this.scope = "session";
     this.adaptiveOnly = localStorage.getItem("adaptive-only") !== "false";
     this.masked = localStorage.getItem("masked") !== "false";
     this.motion = localStorage.getItem("motion") !== "false";
     this.selectedId = null;
+    this.classifierExpanded = false;
     this.recentExpanded = false;
     this.recentPage = 0;
     this.recentPageCount = 1;
@@ -70,7 +77,7 @@ export default class MagpieRoute extends View {
     // One view owns immutable graph paths and synchronized frames across visual redraws.
     this._routingGraphCache = { paths: new Map(), frames: null };
     this.focusHandles = new Map(["refresh", "scope-session", "scope-all", "adaptive", "privacy", "motion", "locale", "quota-refresh",
-      "recent-toggle", "recent-prev", "recent-next"]
+      "usage-refresh", "classifier-toggle", "recent-toggle", "recent-prev", "recent-next"]
       .map(key => [key, cx.focus_handle()]));
     this.loadPort(cx);
     // Timers fetch data only. GPUI animates observed live paths natively.
@@ -81,6 +88,7 @@ export default class MagpieRoute extends View {
       if (this.target?.terminal && Date.now() - this.lastBinding >= REBIND_MS) this.resolve(cx);
       this.pollTrace(cx);
       if (Date.now() - this.lastQuota >= QUOTA_MS) this.pollQuotas(cx);
+      if (Date.now() - this.lastUsage >= USAGE_MS) this.pollUsage(cx);
     });
     cx.spawn(async cx => {
       for (;;) {
@@ -174,6 +182,7 @@ export default class MagpieRoute extends View {
       this.streamEnabled = true;
       this.pollTrace(cx);
       this.pollQuotas(cx);
+      this.pollUsage(cx);
     }
   }
 
@@ -196,6 +205,7 @@ export default class MagpieRoute extends View {
       cx.notify();
       this.pollTrace(cx);
       this.pollQuotas(cx);
+      this.pollUsage(cx);
     });
   }
 
@@ -270,6 +280,34 @@ export default class MagpieRoute extends View {
     });
   }
 
+  pollUsage(cx) {
+    if (!this.visible || this.closed || this.usageJob || this.port === null || this.configError) return;
+    const job = { generation: this.streamGeneration, port: this.port };
+    this.usageJob = job;
+    this.usageBusy = true;
+    this.lastUsage = Date.now();
+    cx.spawn(async cx => {
+      try {
+        const report = await readUsage(job.port);
+        if (job.generation !== this.streamGeneration || !this.visible || this.closed) return;
+        this.usage = report;
+        this.usageError = null;
+      } catch (error) {
+        if (job.generation !== this.streamGeneration || !this.visible || this.closed) return;
+        this.usageError = { key: "system.usageFailed", values: { error: failure(error) } };
+      } finally {
+        if (this.usageJob === job) {
+          this.usageJob = null;
+          this.usageBusy = false;
+        }
+        if (this.visible && !this.closed) {
+          if (job.generation !== this.streamGeneration) this.pollUsage(cx);
+          cx.notify();
+        }
+      }
+    });
+  }
+
   pollQuotas(cx, refresh = false) {
     if (!this.visible || this.closed || this.quotaJob || this.port === null || this.configError) return;
     const job = { generation: this.streamGeneration, port: this.port };
@@ -308,6 +346,9 @@ export default class MagpieRoute extends View {
     this.quotas = [];
     this.quotasUpdated = null;
     this.quotaError = null;
+    this.usage = null;
+    this.usageError = null;
+    this.lastUsage = 0;
     this.error = null;
     this.connection = "connecting";
     this.streamEnabled = true;
@@ -320,12 +361,22 @@ export default class MagpieRoute extends View {
 
   refreshQuotas(cx) { this.pollQuotas(cx, true); }
 
+  refreshUsage(cx) {
+    this.pollUsage(cx);
+    cx.notify();
+  }
+
   routes() {
     return filterRoutes(this.trace, { scope: this.scope, session: this.session, adaptiveOnly: this.adaptiveOnly });
   }
 
   selectRoute(id, cx) {
     this.selectedId = this.selectedId === id ? null : id;
+    cx.notify();
+  }
+
+  toggleClassifier(cx) {
+    this.classifierExpanded = !this.classifierExpanded;
     cx.notify();
   }
   // Reset pages when their filter changes; global history survives tab focus changes.

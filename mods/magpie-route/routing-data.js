@@ -87,6 +87,23 @@ function routeState(value, tries) {
   return value.canceled === true ? "canceled" : "failed";
 }
 
+// Only classification metadata is retained, never raw classifier errors or prompts.
+function normalizeClassifier(value) {
+  if (!object(value)) return null;
+  const score = number(value.score);
+  const sure = number(value.sure);
+  const ms = number(value.ms);
+  return {
+    by: string(value.by), intents: strings(value.intents), intent: string(value.intent),
+    after: string(value.after), effort: string(value.effort),
+    score: score !== null && score >= 0 && score <= 3 ? score : null,
+    sure: sure !== null && sure >= 0 && sure <= 1 ? sure : null,
+    ms: ms !== null && ms >= 0 ? ms : null, cached: value.cached === true,
+    above: string(value.above), fallback: string(value.fallback), afterEffort: string(value.afterEffort),
+    failed: Boolean(string(value.error)),
+  };
+}
+
 function normalizeRoute(value) {
   const candidates = list(value.order).filter(object).map(normalizeCandidate);
   const left = list(value.left).filter(object).map(normalizeCandidate);
@@ -112,6 +129,7 @@ function normalizeRoute(value) {
     provider: current?.candidate?.provider || string(value.provider), group,
     done: value.done === true, status: number(value.status), error: string(value.error),
     ms: number(value.ms), ttft_ms: number(value.ttft), rule: normalizeRule(value.rule),
+    classifier: normalizeClassifier(value.rule?.classified),
     tries, candidates, left, state: routeState(value, tries),
   };
 }
@@ -144,6 +162,41 @@ export async function readTrace(port, previous = emptyTrace()) {
     pid: data.pid, seq: data.seq, routes,
     totals: { requests: data.totals.requests, rerouted: data.totals.rerouted, errors: data.totals.errors },
   };
+}
+
+// Usage's Input excludes reads/writes but includes input whose cache status is
+// unknown. Exclude that unknown portion, as Magpie's Usage page does.
+function cacheMetric(value) {
+  if (!object(value) || ![value.input, value.cache_read, value.cache_write].every(counter)
+    || value.cache_unknown !== undefined && !counter(value.cache_unknown)) return null;
+  const cacheUnknown = value.cache_unknown ?? 0;
+  if (cacheUnknown > value.input) return null;
+  const total = value.input + value.cache_read + value.cache_write - cacheUnknown;
+  if (!Number.isSafeInteger(total)) return null;
+  return {
+    input: value.input, cacheRead: value.cache_read, cacheWrite: value.cache_write,
+    cacheUnknown, total, rate: total > 0 ? value.cache_read / total : null,
+    samples: counter(value.calls) ? value.calls : 0,
+  };
+}
+
+export async function readUsage(port) {
+  const response = await request(port, "usage?period=all");
+  const data = await response.json();
+  const overall = cacheMetric(data);
+  if (!overall || data.period !== "all" || !Array.isArray(data.models) || !counter(data.calls)) {
+    throw messageError("system.invalidUsage");
+  }
+  const models = new Map();
+  for (const model of data.models) {
+    const metric = cacheMetric(model);
+    if (!metric || typeof model.provider !== "string" || typeof model.model !== "string") {
+      throw messageError("system.invalidUsage");
+    }
+    models.set(JSON.stringify([model.provider, model.model]), metric);
+  }
+  // Discard ledger sessions, accounts, keys, file paths, and unrelated usage data.
+  return { period: "all", since: string(data.since), calls: data.calls, overall, models };
 }
 
 function normalizeWindow(value, unavailable) {

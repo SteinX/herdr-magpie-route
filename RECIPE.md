@@ -12,11 +12,13 @@ Top to bottom:
 
 1. Magpie title, connection state, refresh and the shortened source session.
 2. Current-session/all-request segmented scope, model filter, language switch, account-identity and motion controls.
-3. A routing card: OMP sources on the left and individual model/effort destinations on the right. Keep at least 24px between node columns after subtracting layout/card padding at the minimum width. Do not insert a central gateway box.
-4. Live request rows, expandable per-request details and attempt/candidate records.
-5. Global provider quota cards, cached reading/reset timestamps and explicit refresh.
-6. Three recent request rows by default, with expand/collapse and five rows per page when expanded.
-7. A compact footer with global request/reroute/error totals and the cache-history limit.
+3. A compact global input-cache card: two-decimal weighted hit rate, cache-read/eligible tokens, excluded unknown tokens, recording start and manual refresh.
+4. A routing card: OMP sources on the left and individual model/effort destinations on the right, each with its global provider/model cache hit rate. Keep at least 24px between node columns after subtracting layout/card padding at the minimum width. Do not insert a central gateway box.
+5. Live request rows, expandable per-request details and attempt/candidate records.
+6. Global provider quota cards, cached reading/reset timestamps and explicit refresh.
+7. A compact classifier section, collapsed by default; Expand/Collapse reveals full metadata for the exact selected request or the latest classification in the current filtered scope.
+8. Three recent request rows by default, with expand/collapse and five rows per page when expanded.
+9. A compact footer with global request/reroute/error totals and the cache-history limit.
 
 Model-family and provider icons are independent. A GPT model routed through another provider keeps its OpenAI model mark and the provider's own mark. Unknown families retain their text without a fabricated brand. Single-color marks use theme-tinted native SVG masks; colored marks keep their source colors.
 
@@ -30,6 +32,10 @@ The English/Chinese toggle is persisted with localStorage and updates existing d
 
 Refresh restarts stream reading and session binding. Automatic quota reads use cached gateway results; explicit quota refresh can contact upstream providers through Magpie. Disable refresh controls while their corresponding operation is busy. Keep hover, press, selected and keyboard-focus states visible without moving layout bounds.
 
+Read global cache metrics from `usage?period=all` every 30 seconds or on explicit refresh; use `cache_read / (input + cache_read + cache_write - cache_unknown)` and keep two decimal places. The overall and provider/model metrics cover all recorded Usage, including direct/reported/classifier calls, independently of routing filters, efforts and seats. Exclude unknown cache input; unavailable or zero-denominator rates stay unknown. Discard ledger identities and paths immediately after narrowing the response.
+
+The classifier section sits after quotas and before recent requests. Keep its default collapsed summary short, with an explicit Expand/Collapse control and request/time context; never substitute another request's classifier for a selected request that has none. Metadata comes only from `rule.classified`: model, available/chosen intent, current effort, difficulty 0–3, confidence, latency, same-message decision reuse, previous intent/effort, parent-group effort and fallback policy. Missing fields stay unknown. Keep raw classifier errors out of view state and distinguish decision reuse from token caching.
+
 When the gateway is offline, disclose cached/stale results. When session binding is unavailable, explain why and retain all-request browsing. Empty, missing, text-only, unlimited and failed quotas remain distinct; never invent 0% usage. Account identities start hidden. Motion can be disabled.
 
 ## Built from
@@ -40,7 +46,7 @@ Place a block with ID `magpie-route-panel` and `content.mod: magpie-route` besid
 
 Herdr APIs: View, native div/flex/Button/Progress primitives, focus handles, timers and spawned work; layout/spaces/panes/terminals/focused; home/appHome/readTextFile/exec/nextCommand/theme. Graph curves use PathBuilder/window.paint_path and native frame animation. No DOM, browser engine, Node APIs or runtime npm dependencies are involved.
 
-Data comes from Magpie's loopback trace and quota endpoints. The Python standard-library resolver invokes hc and lsof, confirms foreground process identity twice and accepts only a uniquely open root OMP session. It reads bounded leading metadata rather than whole conversations. See README for exact commands, paths and privacy behavior.
+Data comes from Magpie's loopback trace, usage and quota endpoints. The Python standard-library resolver invokes hc and lsof, confirms foreground process identity twice and accepts only a uniquely open root OMP session. It reads bounded leading metadata rather than whole conversations. See README for exact commands, paths and privacy behavior.
 
 Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometric OMP pi marker. See THIRD_PARTY_NOTICES.md.
 
@@ -65,3 +71,5 @@ Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometri
 - Recent preview, expansion, page bounds, shrink-clamping and filter resets work.
 - Both language catalogs have matching keys/placeholders, existing notices switch language, and 340px/680px layouts show complete controls and model identities.
 - Quotas remain global, unknown values stay unknown, and private identities stay masked by default.
+- Global/model cache rates agree with the Usage ledger, retain two decimals, exclude unknown cache input and remain independent of routing filters.
+- Classifier fields retain their reported semantics; previous-turn context, inherited effort and decision reuse are labeled explicitly.
