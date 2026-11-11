@@ -145,7 +145,8 @@ function button(env, key, label, callback, options = {}) {
     .hover(el => { if (!disabled) el.bg(env.t.hover); })
     .active(el => { if (!disabled) el.bg(env.t.raised); })
     .focus(el => el.border_color(env.t.accent))
-    .accessibility_label(options.accessible ?? label).tooltip(options.tooltip ?? label)
+    .accessibility_label(options.accessible ?? label)
+    .when(options.tooltip !== false, el => el.tooltip(options.tooltip ?? label))
     .on_click((_event, cx) => { cx.stop_propagation(); if (!disabled) callback(cx); })
     .when(!options.custom, el => el.child(div().min_w(0).child(label)));
 }
@@ -194,11 +195,11 @@ function header(env, live) {
         .child(h_flex().items_center().gap(8)
           .child(div().font_semibold().text_size(18).child("Magpie"))
           .child(div().text_color(t.muted).text_size(10).child(msg(usagePage ? "ui.accounting.title" : "ui.routing"))))
-        .when(!usagePage, el => el.child(h_flex().min_w(0).items_center().gap(5).role("status")
+        .child(h_flex().min_w(0).items_center().gap(5).role("status")
           .child(dot(env, connectionColor))
           .child(div().text_size(11).text_color(connectionColor).child(connection.label))
-          .when(live.length > 0, el => el.child(div().text_size(11).text_color(t.muted).child(msg("ui.header.active", { count: live.length })))))))
-      .child(button(env, usagePage ? "accounting-refresh" : "refresh", msg(usagePage && view.accountingBusy ? "ui.accounting.reading" : "ui.header.refresh"),
+          .when(live.length > 0, el => el.child(div().text_size(11).text_color(t.muted).child(msg("ui.header.active", { count: live.length }))))))
+      .child(button(env, usagePage ? "accounting-refresh" : "refresh", msg("ui.header.refresh"),
         cx => usagePage ? view.refreshAccounting(cx) : view.refresh(cx), {
           disabled: usagePage && view.accountingBusy,
           accessible: msg(usagePage ? "ui.accounting.refreshAccessible" : "ui.header.refreshAccessible"),
@@ -230,6 +231,11 @@ function header(env, live) {
       .when(usagePage, el => el.child(button(env, "privacy", msg(env.masked ? "ui.privacy.masked" : "ui.privacy.visible"), cx => view.toggleMasked(cx), {
         kind: "quiet", selected: env.masked, padding: 6, accessible: msg(env.masked ? "ui.privacy.maskedAccessible" : "ui.privacy.visibleAccessible"),
       }).flex_1()))
+      .child(button(env, "order-toggle", msg(view.editingPanels ? "ui.order.done" : "ui.order.arrange"),
+        cx => view.togglePanelEditing(cx), {
+          kind: "quiet", selected: view.editingPanels, height: 24, padding: 6,
+          accessible: msg(view.editingPanels ? "ui.order.doneAccessible" : "ui.order.arrangeAccessible"),
+        }).flex_none())
       .child(button(env, "locale", msg("ui.locale.caption"), cx => view.toggleLocale(cx), {
         kind: "quiet", accessible: msg("ui.locale.accessible"), tooltip: msg("ui.locale.accessible"),
       }).flex_none()))
@@ -241,6 +247,94 @@ function header(env, live) {
         kind: "quiet", selected: view.motion, padding: 6, accessible: msg(view.motion ? "ui.motion.onAccessible" : "ui.motion.offAccessible"),
         tooltip: msg("ui.motion.tooltip"),
       }).flex_1())));
+}
+
+function panelTitle(env, id) {
+  return env.msg({
+    cache: "ui.usage.title", routing: "ui.order.routing", active: "ui.requests.active",
+    quotas: "ui.quota.title", classifier: "ui.classifier.title", recent: "ui.recent.title",
+    summary: "ui.order.summary", models: "ui.accounting.models",
+  }[id]);
+}
+
+function panelOrderRow(env, page, id, index, count) {
+  const { view, t, msg } = env;
+  const title = panelTitle(env, id);
+  const drag = view.panelDrag?.page === page ? view.panelDrag : null;
+  const dragging = drag?.active === true;
+  const source = dragging && drag.id === id;
+  const handle = view.focusHandles.get(`order-grip-${page}-${id}`);
+  const grip = h_flex().id(`magpie-order-grip-${page}-${id}`).size(28).flex_none().items_center().justify_center().gap(3)
+    .track_focus(handle).tab_index(0).role("button").rounded(4).border(1)
+    .border_color(handle.is_focused() ? t.accent : t.chrome)
+    .when(source, el => el.cursor_grabbing()).when(!source, el => el.cursor_grab())
+    .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent))
+    .accessibility_label(msg("ui.order.grip", { panel: title }))
+    .when(!dragging, el => el.tooltip(msg("ui.order.grip", { panel: title })))
+    .children([0, 1].map(() => v_flex().gap(3).children([0, 1, 2].map(() => div().size(3).rounded(1).bg(t.muted)))))
+    .on_mouse_down("left", (event, cx) => {
+      cx.stop_propagation();
+      view.startPanelDrag(id, event, cx);
+    })
+    .on_key_down((event, cx) => {
+      const key = event.keystroke ?? event.key;
+      if (key === "up" || key === "down") {
+        cx.stop_propagation();
+        view.movePanelBy(id, key === "up" ? -1 : 1, cx);
+      } else if (key === "escape") {
+        cx.stop_propagation();
+        view.cancelPanelDrag(cx);
+      }
+    });
+  const arrow = (direction, delta, disabled) => h_flex().size(28).flex_none()
+    .child(button(env, `order-${direction}-${page}-${id}`, delta < 0 ? "↑" : "↓",
+      cx => view.movePanelBy(id, delta, cx), {
+        kind: "quiet", height: 28, padding: 0, disabled,
+        accessible: msg(`ui.order.${direction}`, { panel: title }),
+        tooltip: dragging ? false : msg(`ui.order.${direction}`, { panel: title }),
+      }).w(28))
+    .on_mouse_down("left", (_event, cx) => { cx.stop_propagation(); view.cancelPanelDrag(cx); })
+    .on_mouse_up("left", (_event, cx) => { cx.stop_propagation(); view.cancelPanelDrag(cx); });
+  return h_flex().id(`magpie-order-row-${page}-${id}`).relative().w_full().min_w(0).h(38).flex_none()
+    .items_center().gap(6).px(5).rounded(6).border(1).border_color(t.border).bg(t.chrome)
+    .accessibility_label(msg("ui.order.position", { panel: title, position: index + 1, count }))
+    .when(source, el => el.opacity(0.55))
+    .child(grip)
+    .child(div().min_w(0).flex_1().truncate().text_size(11).child(title))
+    .child(arrow("up", -1, index === 0))
+    .child(arrow("down", 1, index === count - 1))
+    .when(dragging && drag.target === id && !source, el => el.child(div().absolute().left(0).right(0).h(2).bg(t.accent)
+      .when(drag.edge === "before", marker => marker.top(0))
+      .when(drag.edge === "after", marker => marker.bottom(0))))
+    .on_mouse_move((event, cx) => view.hoverPanel(id, event, cx))
+    .on_mouse_up("left", (event, cx) => { cx.stop_propagation(); view.dropPanel(id, event, cx); });
+}
+
+function panelOrderEditor(env) {
+  const { view, msg } = env;
+  const page = view.page;
+  const order = view.panelOrder(page);
+  return v_flex().id(`magpie-panel-order-${page}`).w_full().min_w(0).flex_1().gap(10)
+    .child(section(env, msg("ui.order.title"), null,
+      h_flex().flex_none()
+        .child(button(env, "order-reset", msg("ui.order.reset"), cx => view.resetPanelOrder(cx), {
+          kind: "quiet", height: 24, padding: 6, accessible: msg("ui.order.resetAccessible"),
+          tooltip: view.panelDrag?.active ? false : msg("ui.order.resetAccessible"),
+        }))
+        .on_mouse_down("left", (_event, cx) => { cx.stop_propagation(); view.cancelPanelDrag(cx); })
+        .on_mouse_up("left", (_event, cx) => { cx.stop_propagation(); view.cancelPanelDrag(cx); })))
+    .child(line(env, msg("ui.order.help"), env.t.muted).text_size(10))
+    .child(v_flex().w_full().min_w(0).gap(5)
+      .children(order.map((id, index) => panelOrderRow(env, page, id, index, order.length))))
+    .on_mouse_down("left", (_event, cx) => view.cancelPanelDrag(cx))
+    .on_mouse_up("left", (_event, cx) => view.finishPanelDrag(cx))
+    .on_hover((hovered, cx) => { if (!hovered) view.cancelPanelDrag(cx); })
+    .on_key_down((event, cx) => {
+      if ((event.keystroke ?? event.key) === "escape") {
+        cx.stop_propagation();
+        view.cancelPanelDrag(cx);
+      }
+    });
 }
 
 function accountingNumber(env, value) {
@@ -260,13 +354,12 @@ function accountingPrice(env, metric) {
   };
 }
 
-function accountingExact(env, metric) {
-  const exact = value => finite(value) && value >= 0 ? env.number(value) : env.msg("ui.notReported");
-  return env.msg("ui.accounting.exactValues", {
-    calls: exact(metric.calls), tokens: exact(metric.totalTokens), input: exact(metric.input), output: exact(metric.output),
-    cacheRead: exact(metric.cacheRead), cacheWrite: exact(metric.cacheWrite), reasoning: exact(metric.reasoning),
-    cost: finite(metric.cost) && metric.cost >= 0 ? env.msg("ui.accounting.usd", { value: env.number(metric.cost) })
-      : env.msg("ui.accounting.priceUnavailable"),
+function accountingTooltip(env, metric) {
+  return env.msg("ui.accounting.details", {
+    calls: accountingNumber(env, metric.calls), tokens: accountingNumber(env, metric.totalTokens),
+    input: accountingNumber(env, metric.input), output: accountingNumber(env, metric.output),
+    cacheRead: accountingNumber(env, metric.cacheRead), cacheWrite: accountingNumber(env, metric.cacheWrite),
+    reasoning: accountingNumber(env, metric.reasoning), cost: accountingPrice(env, metric).value,
   });
 }
 
@@ -288,7 +381,7 @@ function accountingModel(env, model) {
   const modelName = safeText(env, model.model, msg("ui.model.notReported"), true);
   const providerName = safeText(env, model.provider, msg("ui.provider.notReported"), true);
   return v_flex().w_full().min_w(0).flex_none().p(12).gap(12).rounded(10).border(1).border_color(t.border).bg(t.chrome)
-    .tooltip(accountingExact(env, model))
+    .tooltip(accountingTooltip(env, model))
     .child(v_flex().w_full().min_w(0).gap(5)
       .child(brandedLine(env, modelName, modelIconPath(model.model) ?? providerIconPath(model.provider), 16).font_medium().text_size(13))
       .child(h_flex().w_full().min_w(0).gap(8)
@@ -304,8 +397,35 @@ function accountingModel(env, model) {
       msg("ui.accounting.reasoning", { count: accountingNumber(env, model.reasoning) }), t.muted).text_size(10)));
 }
 
-function accountingPage(env) {
+function accountingSummary(env, accounting) {
   const { view, msg, t } = env;
+  const metric = accounting.totals;
+  const price = accountingPrice(env, metric);
+  return v_flex().id("magpie-panel-usage-summary").w_full().min_w(0).flex_none().gap(14)
+    .child(v_flex().w_full().min_w(0).flex_none().p(12).gap(12).rounded(10).border(1).border_color(t.border).bg(t.chrome)
+      .tooltip(accountingTooltip(env, metric))
+      .child(accountingPair(env, msg("ui.accounting.tokens"), accountingNumber(env, metric?.totalTokens), price.label, price.value, true))
+      .when(Boolean(price.note), el => el.child(line(env, price.note, t.muted).text_size(10)))
+      .child(line(env, msg("ui.accounting.modelCalls", { count: accountingNumber(env, metric?.calls) }), t.muted).text_size(11))
+      .when(Boolean(scalar(accounting.since)), el => el.child(line(env, msg("ui.usage.since", {
+        time: safeText(env, env.date(accounting.since)),
+      }), t.muted).text_size(10)))
+      .when(view.accountingBusy, el => el.child(line(env, msg("ui.accounting.loading"), t.muted).text_size(10))))
+    .child(line(env, msg("ui.accounting.disclaimer"), t.muted).text_size(10));
+}
+
+function accountingModels(env, accounting) {
+  const { msg, t } = env;
+  const models = list(accounting.models);
+  return v_flex().id("magpie-panel-usage-models").w_full().min_w(0).flex_none().gap(14)
+    .child(section(env, msg("ui.accounting.models"), msg("ui.accounting.tokenDefinition")))
+    .child(line(env, msg("ui.accounting.units"), t.muted).text_size(10))
+    .children(models.map(model => accountingModel(env, model)))
+    .when(models.length === 0, el => el.child(notice(env, msg("ui.accounting.emptyTitle"), msg("ui.accounting.empty"))));
+}
+
+function accountingPage(env) {
+  const { view, msg } = env;
   const page = v_flex().w_full().min_w(0).flex_none().gap(14)
     .child(section(env, msg("ui.accounting.title"), msg(view.scope === "all" ? "ui.accounting.scopeAll" : "ui.accounting.scopeSession")));
   if (view.scope === "session" && !view.session) {
@@ -324,24 +444,8 @@ function accountingPage(env) {
   if (accounting.totals?.calls === 0 && !list(accounting.models).length) {
     return page.child(notice(env, msg("ui.accounting.emptyTitle"), msg("ui.accounting.empty")));
   }
-  const metric = accounting.totals;
-  const price = accountingPrice(env, metric);
-  page.child(v_flex().w_full().min_w(0).flex_none().p(12).gap(12).rounded(10).border(1).border_color(t.border).bg(t.chrome)
-    .tooltip(accountingExact(env, metric))
-    .child(accountingPair(env, msg("ui.accounting.tokens"), accountingNumber(env, metric?.totalTokens), price.label, price.value, true))
-    .when(Boolean(price.note), el => el.child(line(env, price.note, t.muted).text_size(10)))
-    .child(line(env, msg("ui.accounting.modelCalls", { count: accountingNumber(env, metric?.calls) }), t.muted).text_size(11))
-    .when(Boolean(scalar(accounting.since)), el => el.child(line(env, msg("ui.usage.since", {
-      time: safeText(env, env.date(accounting.since)),
-    }), t.muted).text_size(10)))
-    .when(view.accountingBusy, el => el.child(line(env, msg("ui.accounting.loading"), t.muted).text_size(10))));
-  page.child(line(env, msg("ui.accounting.disclaimer"), t.muted).text_size(10));
-  const models = list(accounting.models);
-  page.child(section(env, msg("ui.accounting.models"), msg("ui.accounting.tokenDefinition")))
-    .child(line(env, msg("ui.accounting.units"), t.muted).text_size(10))
-    .children(models.map(model => accountingModel(env, model)))
-    .when(models.length === 0, el => el.child(notice(env, msg("ui.accounting.emptyTitle"), msg("ui.accounting.empty"))));
-  return page;
+  return page.children(view.panelOrder("usage").map(id => id === "summary"
+    ? accountingSummary(env, accounting) : accountingModels(env, accounting)));
 }
 
 function usageSummary(env) {
@@ -353,7 +457,7 @@ function usageSummary(env) {
   const panel = v_flex().w_full().min_w(0).flex_none().p(12).gap(7).rounded(10)
     .border(1).border_color(env.t.border).bg(env.t.chrome)
     .child(section(env, msg("ui.usage.title"), null,
-      button(env, "usage-refresh", msg(view.usageBusy ? "ui.usage.reading" : "ui.header.refresh"),
+      button(env, "usage-refresh", msg("ui.header.refresh"),
         cx => view.refreshUsage(cx), { disabled: view.usageBusy, accessible: msg("ui.usage.refreshAccessible") })))
     .child(line(env, msg("ui.usage.scope"), env.t.muted).text_size(10))
     .child(line(env, reported ? msg("ui.usage.rate", {
@@ -796,9 +900,12 @@ export function renderRouting(view, cx) {
     animate: view.connection === "live" && view.motion === true };
   const headerNode = header(env, live);
   const usagePage = view.page === "usage";
-  const content = v_flex().id(usagePage ? "magpie-accounting-scroll" : "magpie-routing-scroll").w_full().min_w(0).min_h(0).flex_1()
+  const content = v_flex().id(view.editingPanels ? `magpie-order-scroll-${view.page}`
+    : usagePage ? "magpie-accounting-scroll" : "magpie-routing-scroll").w_full().min_w(0).min_h(0).flex_1()
     .overflow_y_scrollbar().px(14).py(14).gap(18);
-  if (usagePage) {
+  if (view.editingPanels) {
+    content.child(panelOrderEditor(env));
+  } else if (usagePage) {
     content.child(accountingPage(env));
   } else {
     if (view.configError || view.error) {
@@ -814,12 +921,16 @@ export function renderRouting(view, cx) {
     } else if (view.connection === "connecting" && routes.length === 0) {
       content.child(notice(env, env.msg("ui.notice.connecting"), env.msg("ui.notice.awaitingRequests")));
     }
-    content.child(usageSummary(env));
-    content.child(renderRoutingGraph(env, routes, selected));
-    content.child(requests(env, env.msg("ui.requests.active"), live, env.msg("ui.requests.noneActive")));
-    content.child(quotas(env));
-    content.child(classifierSection(env, routes, selected));
-    content.child(recentRequests(env, recent));
+    const panels = {
+      cache: () => usageSummary(env),
+      routing: () => renderRoutingGraph(env, routes, selected),
+      active: () => requests(env, env.msg("ui.requests.active"), live, env.msg("ui.requests.noneActive")),
+      quotas: () => quotas(env),
+      classifier: () => classifierSection(env, routes, selected),
+      recent: () => recentRequests(env, recent),
+    };
+    content.children(view.panelOrder("routing").map(id => v_flex().id(`magpie-panel-routing-${id}`)
+      .w_full().min_w(0).flex_none().child(panels[id]())));
   }
   const root = v_flex().id("magpie-routing").size_full().min_w(0).min_h(0).bg(t.surface)
     .text_color(t.foreground).text_size(12).line_height(1.4)

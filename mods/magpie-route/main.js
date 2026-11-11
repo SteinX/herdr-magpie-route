@@ -3,6 +3,7 @@ import { appHome, exec, focused, home, layout, nextCommand, panes, readTextFile,
 import { emptyTrace, filterRoutes, readAccounting, readQuotas, readTrace, readUsage } from "./routing-data.js";
 import { renderRouting } from "./route-view.js";
 import { createI18n, messageError } from "./i18n.js";
+import { PANEL_DEFAULTS, movePanel, normalizePanelOrders } from "./panel-order.js";
 
 const PANEL = "magpie-route-panel";
 const DEFAULT_PORT = 3425;
@@ -66,6 +67,9 @@ export default class MagpieRoute extends View {
     this.usageError = null;
     this.lastUsage = 0;
     this.page = localStorage.getItem("page") === "usage" ? "usage" : "routing";
+    this.panelOrders = normalizePanelOrders(localStorage.getItem("panel-orders"));
+    this.editingPanels = false;
+    this.panelDrag = null;
     this.accounting = null;
     this.accountingBusy = false;
     this.accountingError = null;
@@ -85,8 +89,16 @@ export default class MagpieRoute extends View {
     // One view owns immutable graph paths and synchronized frames across visual redraws.
     this._routingGraphCache = { paths: new Map(), frames: null };
     this.focusHandles = new Map(["refresh", "scope-session", "scope-all", "adaptive", "privacy", "motion", "locale", "quota-refresh",
-      "usage-refresh", "page-routing", "page-usage", "accounting-refresh", "classifier-toggle", "recent-toggle", "recent-prev", "recent-next"]
+      "usage-refresh", "page-routing", "page-usage", "accounting-refresh", "classifier-toggle", "recent-toggle", "recent-prev", "recent-next",
+      "order-toggle", "order-reset"]
       .map(key => [key, cx.focus_handle()]));
+    for (const [page, ids] of Object.entries(PANEL_DEFAULTS)) {
+      for (const id of ids) {
+        for (const control of ["grip", "up", "down"]) {
+          this.focusHandles.set(`order-${control}-${page}-${id}`, cx.focus_handle());
+        }
+      }
+    }
     this.loadPort(cx);
     // Timers fetch data only. GPUI animates observed live paths natively.
     // Omit trace's `wait`: any nonempty value holds the request for up to 25s.
@@ -107,6 +119,8 @@ export default class MagpieRoute extends View {
         else if (command === "locale") this.toggleLocale(cx);
         else if (command === "usage") this.setPage("usage", cx);
         else if (command === "routing") this.setPage("routing", cx);
+        else if (command === "arrange") this.togglePanelEditing(cx);
+        else if (command === "order-reset") this.resetPanelOrder(cx);
         else if (command === "scope-session") this.setScope("session", cx);
         else if (command === "scope-all") this.setScope("all", cx);
       }
@@ -168,6 +182,7 @@ export default class MagpieRoute extends View {
   }
 
   hide() {
+    this.cancelPanelDrag();
     if (!this.visible) return;
     this.visible = false;
     this.target = null;
@@ -445,6 +460,7 @@ export default class MagpieRoute extends View {
 
   setPage(page, cx) {
     if ((page !== "routing" && page !== "usage") || page === this.page) return;
+    this.cancelPanelDrag();
     this.page = page;
     localStorage.setItem("page", page);
     // Leaving the page invalidates pending replies without disturbing terminal binding.
@@ -452,6 +468,120 @@ export default class MagpieRoute extends View {
     if (page === "usage") this.pollAccounting(cx);
     else this.pollUsage(cx);
     cx.notify();
+  }
+
+  panelOrder(page = this.page) {
+    return page === "routing" || page === "usage" ? this.panelOrders[page] : [];
+  }
+
+  savePanelOrder(page, order) {
+    const current = this.panelOrder(page);
+    if (!PANEL_DEFAULTS[page] || current === order
+      || current.length === order.length && current.every((id, index) => id === order[index])) return false;
+    this.panelOrders[page] = order;
+    localStorage.setItem("panel-orders", JSON.stringify(this.panelOrders));
+    return true;
+  }
+
+  togglePanelEditing(cx) {
+    if (this.closed) return;
+    this.cancelPanelDrag();
+    this.editingPanels = !this.editingPanels;
+    cx.notify();
+  }
+
+  resetPanelOrder(cx) {
+    if (this.closed || !PANEL_DEFAULTS[this.page]) return;
+    const cancelled = this.cancelPanelDrag();
+    const defaults = PANEL_DEFAULTS[this.page];
+    const current = this.panelOrder();
+    const changed = current.some((id, index) => id !== defaults[index]);
+    if (changed) this.savePanelOrder(this.page, defaults.slice());
+    if (changed || cancelled) cx.notify();
+  }
+
+  movePanelBy(id, delta, cx) {
+    const cancelled = this.cancelPanelDrag();
+    const order = this.panelOrder();
+    const index = order.indexOf(id);
+    if (this.closed || !this.editingPanels || !PANEL_DEFAULTS[this.page]?.includes(id)
+      || !Number.isInteger(delta) || delta === 0 || index < 0 || index + delta < 0 || index + delta >= order.length) {
+      if (cancelled) cx.notify();
+      return;
+    }
+    const next = movePanel(order, id, order[index + delta], delta < 0 ? "before" : "after");
+    const changed = this.savePanelOrder(this.page, next);
+    if (changed || cancelled) cx.notify();
+  }
+
+  startPanelDrag(id, event, cx) {
+    const cancelled = this.cancelPanelDrag();
+    const position = event?.position;
+    if (this.closed || !this.editingPanels || !PANEL_DEFAULTS[this.page]?.includes(id)
+      || event?.button !== "left" || !Number.isFinite(position?.x) || !Number.isFinite(position?.y)) {
+      if (cancelled) cx.notify();
+      return;
+    }
+    this.panelDrag = {
+      page: this.page, id, startX: position.x, startY: position.y,
+      active: false, target: null, edge: "before",
+    };
+    this.focusHandles.get(`order-grip-${this.page}-${id}`)?.focus();
+    cx.notify();
+  }
+
+  hoverPanel(id, event, cx) {
+    const drag = this.panelDrag;
+    if (!drag) return;
+    if (this.closed || !this.editingPanels || drag.page !== this.page || !PANEL_DEFAULTS[this.page]?.includes(drag.id)) {
+      this.cancelPanelDrag(cx);
+      return;
+    }
+    const position = event?.position;
+    if (!PANEL_DEFAULTS[this.page].includes(id) || !Number.isFinite(position?.x) || !Number.isFinite(position?.y)) return;
+    const dx = position.x - drag.startX;
+    const dy = position.y - drag.startY;
+    if (!drag.active && dx * dx + dy * dy < 25) return;
+    let changed = !drag.active;
+    drag.active = true;
+    const y = event.local_position?.y;
+    const height = event.bounds?.height;
+    if (Number.isFinite(y) && Number.isFinite(height) && height > 0) {
+      const edge = y < height / 2 ? "before" : "after";
+      changed = changed || drag.target !== id || drag.edge !== edge;
+      drag.target = id;
+      drag.edge = edge;
+    }
+    if (changed) cx.notify();
+  }
+
+  dropPanel(id, event, cx) {
+    if (!this.panelDrag) return;
+    if (!PANEL_DEFAULTS[this.page]?.includes(id)) {
+      this.cancelPanelDrag(cx);
+      return;
+    }
+    this.hoverPanel(id, event, cx);
+    this.finishPanelDrag(cx);
+  }
+
+  finishPanelDrag(cx) {
+    const drag = this.panelDrag;
+    if (!drag) return;
+    this.panelDrag = null;
+    if (!this.closed && this.editingPanels && drag.active && drag.page === this.page
+      && PANEL_DEFAULTS[this.page]?.includes(drag.id) && PANEL_DEFAULTS[this.page].includes(drag.target)) {
+      const order = this.panelOrder();
+      this.savePanelOrder(this.page, movePanel(order, drag.id, drag.target, drag.edge));
+    }
+    cx.notify();
+  }
+
+  cancelPanelDrag(cx) {
+    if (!this.panelDrag) return false;
+    this.panelDrag = null;
+    cx?.notify();
+    return true;
   }
 
   routes() {

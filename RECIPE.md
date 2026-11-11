@@ -11,7 +11,7 @@ A resizable 420px sidebar, minimum 340px and maximum 680px. Surface and text fol
 Top to bottom:
 
 1. Magpie title, connection state, refresh and the shortened source session.
-2. Routing / Usage & cost page segments, then shared current-session/all scope, language and account-identity controls; model filter and motion controls appear on Routing only.
+2. Routing / Usage & cost page segments, then shared current-session/all scope, language, Arrange/Done and account-identity controls; model filter and motion controls appear on Routing only. Connection status and Refresh remain in the same header positions on both pages, including busy states.
 3. A compact global input-cache card: two-decimal weighted hit rate, cache-read/eligible tokens, excluded unknown tokens, recording start and manual refresh.
 4. A routing card: OMP sources on the left and individual model/effort destinations on the right, each with its global provider/model cache hit rate. Keep at least 24px between node columns after subtracting layout/card padding at the minimum width. Do not insert a central gateway box.
 5. Live request rows, expandable per-request details and attempt/candidate records.
@@ -22,13 +22,15 @@ Top to bottom:
 
 Model-family and provider icons are independent. A GPT model routed through another provider keeps its OpenAI model mark and the provider's own mark. Unknown families retain their text without a fabricated brand. Single-color marks use theme-tinted native SVG masks; colored marks keep their source colors.
 
-Usage & cost is a separate native scroll page: a scoped total-token/USD-estimate summary, pricing-coverage note, and all provider/model cards sorted by token use. Show input/output and cache-read/write counts; reasoning is included in output. Use two-column metric rows that fit 340px, compact K/M/B/T token/call counts and USD amounts, and exact-value tooltips on summary/model cards. Normal USD amounts keep cents and sub-cent estimates retain four decimals. Explicitly show missing/partial pricing and no-data states. Never present estimates as actual charges. Switching pages preserves scope; changing session or scope clears obsolete amounts before the next read.
+Usage & cost is a separate native scroll page: a scoped total-token/USD-estimate summary, pricing-coverage note, and all provider/model cards sorted by token use. Show input/output and cache-read/write counts; reasoning is included in output. Use two-column metric rows that fit 340px and compact K/M/B/T token/call counts and USD amounts in both cards and hover details. Cache hover counts use the same compact units. Normal USD amounts keep cents and sub-cent estimates retain four decimals. Explicitly show missing/partial pricing and no-data states. Never present estimates as actual charges. Switching pages preserves scope; changing session or scope clears obsolete amounts before the next read.
 
 ## How it behaves
 
 A live request has an active destination and native moving points along its observed path. Candidate-only routes are dashed and do not animate. Success, failure, cancellation and ended/continued attempts have distinct text labels as well as theme-derived colors. These are gateway request states; do not infer them from the terminal agent's working/idle status.
 
 Clicking a request toggles details and pins its observed route. Scope/model changes clear the old selection and reset recent-history pagination. Changing the terminal tab resets session-scoped browsing; global pagination stays on the same page. Clamp pages when the retained cache shrinks. Live requests are not paginated.
+
+Arrange mode replaces the expanded content with compact section rows. Drag only from the dotted grip; show before/after insertion lines and commit on release, with no order writes during hover. Escape, leaving the list, page changes and hiding the mod cancel an active drag. Up/down buttons and grip arrow keys provide alternatives. Persist independent Routing and Usage orders in localStorage; normalize duplicate/unknown IDs and append newly introduced sections. Restore default affects only the current page. Keep normal-mode panels free of reorder chrome.
 
 The English/Chinese toggle is persisted with localStorage and updates existing diagnostic descriptors without changing filters, selection or pagination. Translate labels, tooltips, accessibility text, privacy markers, plural counts and date/number formatting. Keep model/provider identifiers and raw upstream data unchanged.
 
@@ -44,7 +46,7 @@ When the gateway is offline, disclose cached/stale results. When session binding
 
 ## Built from
 
-Distribution tree: `mods/magpie-route/` contains `main.js`, `route-view.js`, `routing-graph.js`, `routing-data.js`, `usage-format.js`, `i18n.js`, `locales/`, `resolve-session.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
+Distribution tree: `mods/magpie-route/` contains `main.js`, `route-view.js`, `panel-order.js`, `routing-graph.js`, `routing-data.js`, `usage-format.js`, `i18n.js`, `locales/`, `resolve-session.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
 
 Place a block with ID `magpie-route-panel` and `content.mod: magpie-route` beside the active terminal area in a user-owned horizontal layout row. The manifest is focusable and has `place: none`. The mod reads no pane props.
 
@@ -78,3 +80,4 @@ Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometri
 - Global/model cache rates agree with the Usage ledger, retain two decimals, exclude unknown cache input and remain independent of routing filters.
 - Classifier fields retain their reported semantics; previous-turn context, inherited effort and decision reuse are labeled explicitly.
 - Usage & cost switches exact-session/all gateway accounting without stale amounts, shows full model token totals and honest USD pricing coverage, and keeps routing cache/quotas semantics separate.
+- Section orders persist independently per page; drag release, cancellation, arrow movement and current-page reset work without changing panel data or filters.

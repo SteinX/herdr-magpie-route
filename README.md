@@ -75,9 +75,11 @@ These examples use the `herdr-app` CLI. If it is not on PATH, use the executable
 
 Choose a local OMP tab for **Current session**, or select **All requests** to browse the gateway's retained cache. If your gateway does not use `codex-adaptive`, switch the model filter to **All models**.
 
-The **Routing / Usage & cost** tabs share the current-session/all scope selector and remember the chosen page. Usage & cost reads the persisted gateway-call ledger, refreshes every 30 seconds or on demand, and groups all models by provider/model. It is independent of the routing model filter. Total tokens are `input + output + cache_read + cache_write`; reasoning is already included in output. Handed-on attempts contribute tokens and cost without counting as another request. Token/call counts use decimal K/M/B/T units; hover summary or model cards for full values.
+The **Routing / Usage & cost** tabs share the current-session/all scope selector and remember the chosen page. Connection status and **Refresh** stay visible in the same header positions on both pages, including while usage is loading. Usage & cost reads the persisted gateway-call ledger, refreshes every 30 seconds or on demand, and groups all models by provider/model. It is independent of the routing model filter. Total tokens are `input + output + cache_read + cache_write`; reasoning is already included in output. Handed-on attempts contribute tokens and cost without counting as another request. Token/call counts use decimal K/M/B/T units; summary, model and cache hover details use the same compact units.
 
 Fees are estimates from Magpie's pricing, shown in compact USD amounts: normal amounts keep cents, sub-cent amounts retain four decimal places, and large amounts use K/M/B/T. They are not settled subscription or provider charges. Missing prices remain unavailable; a known-price subtotal is explicitly partial when other call/attempt records are unpriced. Current session requires an exact linked session and includes only records attributed to it. The ledger's broad search is narrowed by exact equality across every page; changing page totals abort the read rather than silently double-counting. All usage covers recorded calls through Magpie, excluding imported direct-call history and client-reported calls. A scope with no recorded calls shows no-data status rather than inferring zero charges; in-flight usage appears after it is recorded.
+
+Choose **Arrange** to reorder the current page's sections using the dotted grips, then **Done** to return to the data. The insertion line marks the drop position; releasing saves, while Escape or leaving the list cancels the drag. Up/down buttons and grip arrow keys provide alternatives. Routing and Usage orders are saved separately across restarts; **Restore default** resets only the current page.
 
 Click a request to expand its details and pin its route. Recent history starts with three rows; **Show all** enables five rows per page. Filtering resets the page. Global-history pagination survives changing the active terminal tab.
 
@@ -89,7 +91,7 @@ The language button shows **中文** in English and **EN** in Chinese. It change
 
 Quotas are global: changing session or model filters does not narrow the quota cards. Automatic reads use gateway cache; **Refresh quotas** explicitly asks the gateway to refresh provider readings. Unknown quota is never displayed as zero usage.
 
-Native mod commands `magpie-route.refresh`, `magpie-route.locale`, `magpie-route.routing`, `magpie-route.usage`, `magpie-route.scope-session` and `magpie-route.scope-all` can be invoked with `herdr-app do` or assigned keys in your own `keys.json`. The locale command toggles the same saved language preference as the button.
+Native mod commands `magpie-route.refresh`, `magpie-route.locale`, `magpie-route.routing`, `magpie-route.usage`, `magpie-route.scope-session`, `magpie-route.scope-all`, `magpie-route.arrange` and `magpie-route.order-reset` can be invoked with `herdr-app do` or assigned keys in your own `keys.json`. The locale command toggles the same saved language preference as the button.
 
 ## Data access and privacy
 

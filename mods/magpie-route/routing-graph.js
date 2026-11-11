@@ -1,6 +1,7 @@
 import { div, image, PathBuilder } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { brandIcon, modelIconPath, providerIconPath } from "./brand-icons.js";
+import { compactNumber } from "./usage-format.js";
 
 const list = value => Array.isArray(value) ? value : [];
 const text = value => typeof value === "string" ? value.trim()
@@ -385,9 +386,9 @@ function targetPresentation(env, target, width, pinned) {
       : env.msg("graph.unreported"),
   });
   const cacheTooltip = [cacheText, env.msg("graph.target.cacheScope"), metric
-    ? env.msg("graph.target.cacheTokens", { read: env.number(metric.cacheRead), total: env.number(metric.total) })
+    ? env.msg("graph.target.cacheTokens", { read: compactNumber(metric.cacheRead), total: compactNumber(metric.total) })
     : env.msg("graph.target.cacheUnreported"),
-    metric && metric.cacheUnknown > 0 ? env.msg("graph.target.cacheUnknown", { unknown: env.number(metric.cacheUnknown) }) : "",
+    metric && metric.cacheUnknown > 0 ? env.msg("graph.target.cacheUnknown", { unknown: compactNumber(metric.cacheUnknown) }) : "",
   ].filter(Boolean).join("\n");
   const title = wrapped(model, width - 20 - (modelIcon ? 20 : 0), 12);
   const detail = wrapped(detailText, width - 20 - (providerIcon ? 17 : 0), 11);
