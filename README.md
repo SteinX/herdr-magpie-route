@@ -12,6 +12,7 @@ Recorded from real gateway requests, with moving points on active paths and dist
 
 - Follow the current local OMP session or inspect all retained gateway requests.
 - See actual model destinations, effort, candidate branches and live native flow animation.
+- Switch to a dedicated Usage & cost page for per-model input/output/cache tokens and USD estimates, scoped to the current session or all recorded gateway calls.
 - Read overall and per-model input-cache hit rates, shown to two decimal places from all recorded Magpie Usage data.
 - Expand the compact classifier section above recent requests to inspect model, intent, difficulty, confidence, latency and decision reuse.
 - Inspect request attempts and routing details; preview three recent requests or expand into five-request pages.
@@ -74,9 +75,13 @@ These examples use the `herdr-app` CLI. If it is not on PATH, use the executable
 
 Choose a local OMP tab for **Current session**, or select **All requests** to browse the gateway's retained cache. If your gateway does not use `codex-adaptive`, switch the model filter to **All models**.
 
+The **Routing / Usage & cost** tabs share the current-session/all scope selector and remember the chosen page. Usage & cost reads the persisted gateway-call ledger, refreshes every 30 seconds or on demand, and groups all models by provider/model. It is independent of the routing model filter. Total tokens are `input + output + cache_read + cache_write`; reasoning is already included in output. Handed-on attempts contribute tokens and cost without counting as another request. Token/call counts use decimal K/M/B/T units; hover summary or model cards for full values.
+
+Fees are estimates from Magpie's pricing, shown in compact USD amounts: normal amounts keep cents, sub-cent amounts retain four decimal places, and large amounts use K/M/B/T. They are not settled subscription or provider charges. Missing prices remain unavailable; a known-price subtotal is explicitly partial when other call/attempt records are unpriced. Current session requires an exact linked session and includes only records attributed to it. The ledger's broad search is narrowed by exact equality across every page; changing page totals abort the read rather than silently double-counting. All usage covers recorded calls through Magpie, excluding imported direct-call history and client-reported calls. A scope with no recorded calls shows no-data status rather than inferring zero charges; in-flight usage appears after it is recorded.
+
 Click a request to expand its details and pin its route. Recent history starts with three rows; **Show all** enables five rows per page. Filtering resets the page. Global-history pagination survives changing the active terminal tab.
 
-Input-cache statistics use `usage?period=all` and refresh every 30 seconds or on demand. They cover all recorded Magpie Usage, including direct, reported and classifier calls, independently of session/model filters. Overall hit rate is token-weighted: `cache_read / (input + cache_read + cache_write - cache_unknown)`. The model cards use the same ledger grouped by provider/model across efforts and accounts. Unknown cache input is excluded; no eligible tokens or unavailable readings show “Not reported”. Rates retain two decimal places, including `0.00%` and `100.00%` when known.
+Input-cache statistics use `usage?period=all` and refresh every 30 seconds or on demand. They cover the recorded Magpie usage log, including client-reported and classifier calls, independently of session/model filters. Overall hit rate is token-weighted: `cache_read / (input + cache_read + cache_write - cache_unknown)`. The model cards use the same log grouped by provider/model across efforts and accounts. Unknown cache input is excluded; no eligible tokens or unavailable readings show “Not reported”. Rates retain two decimal places, including `0.00%` and `100.00%` when known.
 
 The classifier section sits between account quotas and recent requests and starts collapsed. It shows the selected request's classifier, or the latest reported classification in the current routing scope when nothing is selected. Expand it for full metadata. Previous intent/effort are context, parent-group effort is inherited, and decision reuse is separate from input-token cache hits. Missing values remain unknown; raw classifier errors are not retained.
 
@@ -84,18 +89,19 @@ The language button shows **中文** in English and **EN** in Chinese. It change
 
 Quotas are global: changing session or model filters does not narrow the quota cards. Automatic reads use gateway cache; **Refresh quotas** explicitly asks the gateway to refresh provider readings. Unknown quota is never displayed as zero usage.
 
-Native mod commands `magpie-route.refresh` and `magpie-route.locale` can also be invoked with `herdr-app do` or assigned keys in your own `keys.json`. The locale command toggles the same saved language preference as the button.
+Native mod commands `magpie-route.refresh`, `magpie-route.locale`, `magpie-route.routing`, `magpie-route.usage`, `magpie-route.scope-session` and `magpie-route.scope-all` can be invoked with `herdr-app do` or assigned keys in your own `keys.json`. The locale command toggles the same saved language preference as the button.
 
 ## Data access and privacy
 
 The mod:
 
 - Reads only the gateway port from `~/.config/magpie/settings.json`, defaulting to 3425.
-- Uses loopback HTTP at `127.0.0.1:<port>/v1/magpie/`: `GET trace?after=…`, `GET usage?period=all`, `GET quotas?kept=1`, and explicit `POST quotas/refresh`.
+- Uses loopback HTTP at `127.0.0.1:<port>/v1/magpie/`: `GET trace?after=…`, `GET usage?period=all`, `GET usage/requests?period=all&via=through&limit=…&offset=…` (with `q` for session reads), `GET quotas?kept=1`, and explicit `POST quotas/refresh`.
 - Runs `python3`, `hc get --json` and `lsof` to bind a local terminal's foreground OMP process to its uniquely open root session.
 - Reads at most 16 KiB / four leading lines of candidate session files under `~/.omp/agent/sessions`; it does not scan full conversation history.
 - Retains a narrowed set of routing fields rather than full trace prompt metadata. Account names are masked by default. Provider-supplied raw text keeps its original language.
 - Reduces Usage responses immediately to aggregate/model counters and the recording start; session, account, key and file-path fields are discarded.
+- Narrows accounting pages immediately to token/price counters, matching the linked session locally; raw ledger rows, account/key metadata and response IDs are not retained in view state.
 
 The request list is the gateway's recent cache, not a complete session archive. No telemetry or external icon downloads occur at runtime. This repository contains no user settings, account credentials, session files or personal layouts. The preview is a redacted capture of the native panel.
 

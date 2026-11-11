@@ -199,6 +199,121 @@ export async function readUsage(port) {
   return { period: "all", since: string(data.since), calls: data.calls, overall, models };
 }
 
+function accountingMetric(value) {
+  if (!object(value) || !["calls", "input", "output", "cache_read", "cache_write"]
+    .every(key => counter(value[key]))) throw messageError("system.invalidAccounting");
+  const reasoning = value.reasoning ?? 0;
+  const cacheUnknown = value.cache_unknown ?? 0;
+  if (!counter(reasoning) || !counter(cacheUnknown)
+    || value.unpriced !== undefined && !counter(value.unpriced)) throw messageError("system.invalidAccounting");
+  const totalTokens = value.input + value.output + value.cache_read + value.cache_write;
+  if (!Number.isSafeInteger(totalTokens)) throw messageError("system.invalidAccounting");
+  const unpriced = value.unpriced ?? null;
+  const cost = number(value.cost);
+  return {
+    calls: value.calls, input: value.input, output: value.output,
+    cacheRead: value.cache_read, cacheWrite: value.cache_write, cacheUnknown, reasoning, totalTokens,
+    cost: cost !== null && cost >= 0 && !(cost === 0 && unpriced > 0) ? cost : null, unpriced,
+  };
+}
+
+function accountingAccumulator() {
+  return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+    cacheUnknown: 0, reasoning: 0, totalTokens: 0, cost: 0, unpriced: 0, _priced: false };
+}
+
+function addAccounting(target, metric) {
+  for (const key of ["calls", "input", "output", "cacheRead", "cacheWrite", "cacheUnknown", "reasoning", "totalTokens"]) {
+    target[key] += metric[key];
+    if (!counter(target[key])) throw messageError("system.invalidAccounting");
+  }
+  if (metric.cost !== null) { target.cost += metric.cost; target._priced = true; }
+  target.unpriced = target.unpriced !== null && metric.unpriced !== null ? target.unpriced + metric.unpriced : null;
+}
+
+function finishAccounting(value) {
+  const { _priced, ...metric } = value;
+  if (!_priced || metric.cost === 0 && metric.unpriced > 0) metric.cost = null;
+  return metric;
+}
+
+function accountingModels(models) {
+  return [...models.values()].map(finishAccounting).sort((a, b) => b.totalTokens - a.totalTokens
+    || (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : a.model < b.model ? -1 : a.model > b.model ? 1 : 0));
+}
+
+export async function readAccounting(port, { scope, session = null } = {}) {
+  if (!["all", "session"].includes(scope)) throw messageError("system.invalidAccounting");
+  if (scope === "session" && (typeof session !== "string" || !session.trim())) {
+    throw messageError("system.accountingUnbound");
+  }
+  // Restrict both scopes to calls through Magpie, matching the routing sidebar.
+  // The unfiltered ledger also imports unrelated historical agent session files.
+  const base = `usage/requests?period=all&via=through&limit=${scope === "all" ? 1 : 500}`
+    + (scope === "session" ? `&q=${encodeURIComponent(session)}` : "");
+  const models = new Map();
+  const totals = accountingAccumulator();
+  let expectedTotal = null;
+  let offset = 0;
+  let earliest = Infinity;
+  do {
+    const response = await request(port, `${base}&offset=${offset}`);
+    const data = await response.json();
+    if (!object(data) || data.period !== "all" || !counter(data.total) || data.offset !== offset
+      || !Array.isArray(data.rows) || data.rows.length > data.total - offset) {
+      throw messageError("system.invalidAccounting");
+    }
+    if (scope === "all") {
+      if (!Array.isArray(data.by?.modelAt)) throw messageError("system.invalidAccounting");
+      for (const share of data.by.modelAt) {
+        if (!object(share) || typeof share.id !== "string" || !share.id.includes("/")) {
+          throw messageError("system.invalidAccounting");
+        }
+        // A model may contain slashes; provider IDs do not.
+        const slash = share.id.indexOf("/");
+        const provider = share.id.slice(0, slash);
+        const model = share.id.slice(slash + 1);
+        const key = JSON.stringify([provider, model]);
+        if (!models.has(key)) models.set(key, { ...accountingAccumulator(), provider, model });
+        addAccounting(models.get(key), accountingMetric(share));
+      }
+      return { scope, session: null, since: "", totals: accountingMetric(data), models: accountingModels(models) };
+    }
+    // q is only a broad substring search. Never attribute another session's rows.
+    // Offset pages are mutable: reject a changing scan instead of double-counting.
+    if (expectedTotal !== null && data.total !== expectedTotal) throw messageError("system.accountingChanged");
+    expectedTotal = data.total;
+    if (!data.rows.length && offset < expectedTotal) throw messageError("system.invalidAccounting");
+    for (const row of data.rows) {
+      if (!object(row)) throw messageError("system.invalidAccounting");
+      if (row.session !== session || row.rejected === true
+        || !string(row.provider) && number(row.status) !== null && row.status >= 400) continue;
+      const input = row.in ?? 0;
+      const output = row.out ?? 0;
+      const cacheRead = row.cache_read ?? 0;
+      const cacheWrite = row.cache_write ?? 0;
+      const cost = number(row.cost);
+      const priced = row.priced === true && cost !== null && cost >= 0;
+      const metric = accountingMetric({ calls: row.handed_on === true ? 0 : 1,
+        input, output, cache_read: cacheRead, cache_write: cacheWrite,
+        cache_unknown: row.cache_unknown === true ? input : 0, reasoning: row.reasoning ?? 0,
+        cost: priced ? cost : undefined, unpriced: !priced && input + output > 0 ? 1 : 0 });
+      const provider = string(row.provider);
+      const model = string(row.model);
+      const key = JSON.stringify([provider, model]);
+      if (!models.has(key)) models.set(key, { ...accountingAccumulator(), provider, model });
+      addAccounting(models.get(key), metric);
+      addAccounting(totals, metric);
+      const time = Date.parse(row.t);
+      if (Number.isFinite(time)) earliest = Math.min(earliest, time);
+    }
+    offset += data.rows.length;
+  } while (offset < expectedTotal);
+  // No raw ledger rows, account/key fields, response IDs or file paths escape.
+  return { scope, session, since: Number.isFinite(earliest) ? new Date(earliest).toISOString() : "",
+    totals: finishAccounting(totals), models: accountingModels(models) };
+}
+
 function normalizeWindow(value, unavailable) {
   const balance = number(value.balance);
   const percentage = !unavailable && value.text !== true && value.unlimited !== true && balance === null;

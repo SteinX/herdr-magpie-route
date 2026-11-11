@@ -11,7 +11,7 @@ A resizable 420px sidebar, minimum 340px and maximum 680px. Surface and text fol
 Top to bottom:
 
 1. Magpie title, connection state, refresh and the shortened source session.
-2. Current-session/all-request segmented scope, model filter, language switch, account-identity and motion controls.
+2. Routing / Usage & cost page segments, then shared current-session/all scope, language and account-identity controls; model filter and motion controls appear on Routing only.
 3. A compact global input-cache card: two-decimal weighted hit rate, cache-read/eligible tokens, excluded unknown tokens, recording start and manual refresh.
 4. A routing card: OMP sources on the left and individual model/effort destinations on the right, each with its global provider/model cache hit rate. Keep at least 24px between node columns after subtracting layout/card padding at the minimum width. Do not insert a central gateway box.
 5. Live request rows, expandable per-request details and attempt/candidate records.
@@ -21,6 +21,8 @@ Top to bottom:
 9. A compact footer with global request/reroute/error totals and the cache-history limit.
 
 Model-family and provider icons are independent. A GPT model routed through another provider keeps its OpenAI model mark and the provider's own mark. Unknown families retain their text without a fabricated brand. Single-color marks use theme-tinted native SVG masks; colored marks keep their source colors.
+
+Usage & cost is a separate native scroll page: a scoped total-token/USD-estimate summary, pricing-coverage note, and all provider/model cards sorted by token use. Show input/output and cache-read/write counts; reasoning is included in output. Use two-column metric rows that fit 340px, compact K/M/B/T token/call counts and USD amounts, and exact-value tooltips on summary/model cards. Normal USD amounts keep cents and sub-cent estimates retain four decimals. Explicitly show missing/partial pricing and no-data states. Never present estimates as actual charges. Switching pages preserves scope; changing session or scope clears obsolete amounts before the next read.
 
 ## How it behaves
 
@@ -32,15 +34,17 @@ The English/Chinese toggle is persisted with localStorage and updates existing d
 
 Refresh restarts stream reading and session binding. Automatic quota reads use cached gateway results; explicit quota refresh can contact upstream providers through Magpie. Disable refresh controls while their corresponding operation is busy. Keep hover, press, selected and keyboard-focus states visible without moving layout bounds.
 
-Read global cache metrics from `usage?period=all` every 30 seconds or on explicit refresh; use `cache_read / (input + cache_read + cache_write - cache_unknown)` and keep two decimal places. The overall and provider/model metrics cover all recorded Usage, including direct/reported/classifier calls, independently of routing filters, efforts and seats. Exclude unknown cache input; unavailable or zero-denominator rates stay unknown. Discard ledger identities and paths immediately after narrowing the response.
+Read global cache metrics from `usage?period=all` every 30 seconds or on explicit refresh; use `cache_read / (input + cache_read + cache_write - cache_unknown)` and keep two decimal places. The overall and provider/model metrics cover the recorded Magpie usage log, including client-reported and classifier calls, independently of routing filters, efforts and seats. Exclude unknown cache input; unavailable or zero-denominator rates stay unknown. Discard ledger identities and paths immediately after narrowing the response.
 
 The classifier section sits after quotas and before recent requests. Keep its default collapsed summary short, with an explicit Expand/Collapse control and request/time context; never substitute another request's classifier for a selected request that has none. Metadata comes only from `rule.classified`: model, available/chosen intent, current effort, difficulty 0–3, confidence, latency, same-message decision reuse, previous intent/effort, parent-group effort and fallback policy. Missing fields stay unknown. Keep raw classifier errors out of view state and distinguish decision reuse from token caching.
+
+Accounting uses `usage/requests?period=all&via=through` for both scopes: All reads server totals and provider/model shares, while Session uses encoded `q` plus exact session equality across every offset page. Reject changed totals rather than returning an incomplete or double-counted read. Count tokens/cost from handed-on attempts without adding a call; exclude local rejections. Preserve priced zero, distinguish unavailable/partially priced estimates, and do not add imported direct-session history or reported calls. Guard asynchronous results by session, scope and view generations; never show a previous session's amount under a new session.
 
 When the gateway is offline, disclose cached/stale results. When session binding is unavailable, explain why and retain all-request browsing. Empty, missing, text-only, unlimited and failed quotas remain distinct; never invent 0% usage. Account identities start hidden. Motion can be disabled.
 
 ## Built from
 
-Distribution tree: `mods/magpie-route/` contains `main.js`, `route-view.js`, `routing-graph.js`, `routing-data.js`, `i18n.js`, `locales/`, `resolve-session.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
+Distribution tree: `mods/magpie-route/` contains `main.js`, `route-view.js`, `routing-graph.js`, `routing-data.js`, `usage-format.js`, `i18n.js`, `locales/`, `resolve-session.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
 
 Place a block with ID `magpie-route-panel` and `content.mod: magpie-route` beside the active terminal area in a user-owned horizontal layout row. The manifest is focusable and has `place: none`. The mod reads no pane props.
 
@@ -73,3 +77,4 @@ Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometri
 - Quotas remain global, unknown values stay unknown, and private identities stay masked by default.
 - Global/model cache rates agree with the Usage ledger, retain two decimals, exclude unknown cache input and remain independent of routing filters.
 - Classifier fields retain their reported semantics; previous-turn context, inherited effort and decision reuse are labeled explicitly.
+- Usage & cost switches exact-session/all gateway accounting without stale amounts, shows full model token totals and honest USD pricing coverage, and keeps routing cache/quotas semantics separate.

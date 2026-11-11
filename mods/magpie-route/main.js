@@ -1,6 +1,6 @@
 import { View } from "gpui-kit";
 import { appHome, exec, focused, home, layout, nextCommand, panes, readTextFile, spaces, terminals } from "herdr";
-import { emptyTrace, filterRoutes, readQuotas, readTrace, readUsage } from "./routing-data.js";
+import { emptyTrace, filterRoutes, readAccounting, readQuotas, readTrace, readUsage } from "./routing-data.js";
 import { renderRouting } from "./route-view.js";
 import { createI18n, messageError } from "./i18n.js";
 
@@ -9,6 +9,7 @@ const DEFAULT_PORT = 3425;
 const REBIND_MS = 5000;
 const QUOTA_MS = 30000;
 const USAGE_MS = 30000;
+const ACCOUNTING_MS = 30000;
 const nonempty = value => typeof value === "string" && value.trim().length > 0;
 
 function shown(node, hidden = false) {
@@ -28,7 +29,7 @@ function failure(error) {
   return String(error?.message ?? error).replace(/https?:\/\/[^\s"'<>]+/g, "Magpie").slice(0, 300);
 }
 
-/** Native routing dashboard: live routes, global quotas, and paged recent requests. */
+/** Native routing and usage dashboard: live routes, quotas, and persisted accounting. */
 export default class MagpieRoute extends View {
   init(_props, cx) {
     this.i18n = createI18n(localStorage.getItem("locale"));
@@ -64,6 +65,13 @@ export default class MagpieRoute extends View {
     this.usageBusy = false;
     this.usageError = null;
     this.lastUsage = 0;
+    this.page = localStorage.getItem("page") === "usage" ? "usage" : "routing";
+    this.accounting = null;
+    this.accountingBusy = false;
+    this.accountingError = null;
+    this.accountingJob = null;
+    this.accountingGeneration = 0;
+    this.lastAccounting = 0;
     this.scope = "session";
     this.adaptiveOnly = localStorage.getItem("adaptive-only") !== "false";
     this.masked = localStorage.getItem("masked") !== "false";
@@ -77,7 +85,7 @@ export default class MagpieRoute extends View {
     // One view owns immutable graph paths and synchronized frames across visual redraws.
     this._routingGraphCache = { paths: new Map(), frames: null };
     this.focusHandles = new Map(["refresh", "scope-session", "scope-all", "adaptive", "privacy", "motion", "locale", "quota-refresh",
-      "usage-refresh", "classifier-toggle", "recent-toggle", "recent-prev", "recent-next"]
+      "usage-refresh", "page-routing", "page-usage", "accounting-refresh", "classifier-toggle", "recent-toggle", "recent-prev", "recent-next"]
       .map(key => [key, cx.focus_handle()]));
     this.loadPort(cx);
     // Timers fetch data only. GPUI animates observed live paths natively.
@@ -89,6 +97,7 @@ export default class MagpieRoute extends View {
       this.pollTrace(cx);
       if (Date.now() - this.lastQuota >= QUOTA_MS) this.pollQuotas(cx);
       if (Date.now() - this.lastUsage >= USAGE_MS) this.pollUsage(cx);
+      if (Date.now() - this.lastAccounting >= ACCOUNTING_MS) this.pollAccounting(cx);
     });
     cx.spawn(async cx => {
       for (;;) {
@@ -96,6 +105,10 @@ export default class MagpieRoute extends View {
         if (command === "focus") this.focusHandles.values().next().value?.focus();
         else if (command === "refresh") this.refresh(cx);
         else if (command === "locale") this.toggleLocale(cx);
+        else if (command === "usage") this.setPage("usage", cx);
+        else if (command === "routing") this.setPage("routing", cx);
+        else if (command === "scope-session") this.setScope("session", cx);
+        else if (command === "scope-all") this.setScope("all", cx);
       }
     });
   }
@@ -147,6 +160,7 @@ export default class MagpieRoute extends View {
     this.bindingGeneration++;
     this.session = null;
     this.reason = null;
+    if (this.scope === "session") this.resetAccounting();
     this.selectedId = null;
     if (this.scope !== "all") this.resetRecent();
     this.bindingPaused = false;
@@ -183,6 +197,7 @@ export default class MagpieRoute extends View {
       this.pollTrace(cx);
       this.pollQuotas(cx);
       this.pollUsage(cx);
+      this.pollAccounting(cx);
     }
   }
 
@@ -206,6 +221,7 @@ export default class MagpieRoute extends View {
       this.pollTrace(cx);
       this.pollQuotas(cx);
       this.pollUsage(cx);
+      this.pollAccounting(cx);
     });
   }
 
@@ -228,13 +244,19 @@ export default class MagpieRoute extends View {
         if (binding?.terminal !== job.terminal || !(binding.session === null || nonempty(binding.session))) throw messageError("system.invalidBinding");
         const reason = binding.session ? null : { key: binding.reason || "system.awaitingRequest", values: {} };
         const changed = this.session !== binding.session || this.reason?.key !== reason?.key;
-        if (this.session !== binding.session) this.selectedId = null;
+        const sessionChanged = this.session !== binding.session;
+        if (sessionChanged) {
+          this.selectedId = null;
+          if (this.scope === "session") this.resetAccounting();
+        }
         this.session = binding.session;
         this.reason = reason;
+        if (sessionChanged && this.scope === "session") this.pollAccounting(cx);
         if (changed) cx.notify();
       } catch (error) {
         if (job.generation !== this.bindingGeneration || !this.visible || this.closed) return;
         this.session = null;
+        if (this.scope === "session") this.resetAccounting();
         this.selectedId = null;
         this.bindingPaused = true;
         this.reason = { key: "system.bindingFailed", values: { error: failure(error) } };
@@ -281,7 +303,7 @@ export default class MagpieRoute extends View {
   }
 
   pollUsage(cx) {
-    if (!this.visible || this.closed || this.usageJob || this.port === null || this.configError) return;
+    if (!this.visible || this.closed || this.page !== "routing" || this.usageJob || this.port === null || this.configError) return;
     const job = { generation: this.streamGeneration, port: this.port };
     this.usageJob = job;
     this.usageBusy = true;
@@ -289,11 +311,11 @@ export default class MagpieRoute extends View {
     cx.spawn(async cx => {
       try {
         const report = await readUsage(job.port);
-        if (job.generation !== this.streamGeneration || !this.visible || this.closed) return;
+        if (job.generation !== this.streamGeneration || !this.visible || this.closed || this.page !== "routing") return;
         this.usage = report;
         this.usageError = null;
       } catch (error) {
-        if (job.generation !== this.streamGeneration || !this.visible || this.closed) return;
+        if (job.generation !== this.streamGeneration || !this.visible || this.closed || this.page !== "routing") return;
         this.usageError = { key: "system.usageFailed", values: { error: failure(error) } };
       } finally {
         if (this.usageJob === job) {
@@ -350,6 +372,7 @@ export default class MagpieRoute extends View {
     this.usageError = null;
     this.lastUsage = 0;
     this.error = null;
+    if (this.scope === "all") this.resetAccounting();
     this.connection = "connecting";
     this.streamEnabled = true;
     this.resetBinding();
@@ -363,6 +386,71 @@ export default class MagpieRoute extends View {
 
   refreshUsage(cx) {
     this.pollUsage(cx);
+    cx.notify();
+  }
+
+  resetAccounting() {
+    this.accountingGeneration++;
+    this.accounting = null;
+    this.accountingError = null;
+    this.lastAccounting = 0;
+  }
+
+  accountingCurrent(job) {
+    return this.visible && !this.closed && this.page === "usage" && shown(layout())
+      && !this.configError && job.port === this.port
+      && job.streamGeneration === this.streamGeneration && job.generation === this.accountingGeneration
+      && job.scope === this.scope && (job.scope === "all" || nonempty(this.session) && job.session === this.session);
+  }
+
+  pollAccounting(cx) {
+    if (!this.visible || this.closed || this.page !== "usage" || this.accountingJob
+      || this.port === null || this.configError || this.scope === "session" && !nonempty(this.session)) return;
+    if (!shown(layout())) { this.hide(); return; }
+    const job = {
+      generation: this.accountingGeneration,
+      streamGeneration: this.streamGeneration,
+      port: this.port,
+      scope: this.scope,
+      session: this.scope === "session" ? this.session : null,
+    };
+    this.accountingJob = job;
+    this.accountingBusy = true;
+    this.lastAccounting = Date.now();
+    cx.spawn(async cx => {
+      try {
+        const report = await readAccounting(job.port, { scope: job.scope, session: job.session });
+        if (!this.accountingCurrent(job)) return;
+        this.accounting = report;
+        this.accountingError = null;
+      } catch (error) {
+        if (!this.accountingCurrent(job)) return;
+        this.accountingError = { key: "system.accountingFailed", values: { error: failure(error) } };
+      } finally {
+        if (this.accountingJob === job) {
+          this.accountingJob = null;
+          this.accountingBusy = false;
+        }
+        if (!this.accountingCurrent(job)) this.pollAccounting(cx);
+        if (this.visible && !this.closed) cx.notify();
+      }
+    });
+  }
+
+  refreshAccounting(cx) {
+    this.resetAccounting();
+    this.pollAccounting(cx);
+    cx.notify();
+  }
+
+  setPage(page, cx) {
+    if ((page !== "routing" && page !== "usage") || page === this.page) return;
+    this.page = page;
+    localStorage.setItem("page", page);
+    // Leaving the page invalidates pending replies without disturbing terminal binding.
+    this.accountingGeneration++;
+    if (page === "usage") this.pollAccounting(cx);
+    else this.pollUsage(cx);
     cx.notify();
   }
 
@@ -408,8 +496,10 @@ export default class MagpieRoute extends View {
 
 
   setScope(scope, cx) {
-    if (scope !== "session" && scope !== "all") return;
+    if ((scope !== "session" && scope !== "all") || scope === this.scope) return;
     this.scope = scope;
+    this.resetAccounting();
+    this.pollAccounting(cx);
     this.selectedId = null;
     this.resetRecent();
     cx.notify();

@@ -3,6 +3,7 @@ import { Button, Progress, ProgressTrack, ProgressIndicator, h_flex, v_flex } fr
 import { theme } from "herdr";
 import { renderRoutingGraph } from "./routing-graph.js";
 import { brandIcon, modelIconPath, providerIconPath } from "./brand-icons.js";
+import { compactCost, compactNumber } from "./usage-format.js";
 
 const finite = value => typeof value === "number" && Number.isFinite(value);
 const list = value => Array.isArray(value) ? value : [];
@@ -88,7 +89,7 @@ function privacyValues(view, routes) {
   return [...values].sort((a, b) => b.length - a.length);
 }
 
-function safeText(env, value, fallback = env.msg("ui.notReported")) {
+function safeText(env, value, fallback = env.msg("ui.notReported"), publicIdentifier = false) {
   let text = scalar(typeof value === "object" ? env.messageValue(value) : value);
   if (!text) return fallback;
   const hidden = env.msg("ui.privacy.hidden");
@@ -98,7 +99,7 @@ function safeText(env, value, fallback = env.msg("ui.notReported")) {
     .replace(/\b(?:sk|sess|key)-[A-Za-z0-9_-]{12,}\b/g, () => env.msg("ui.privacy.credentialHidden"))
     .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password)\s*[=:]\s*)[^\s,;]+/gi, (_match, prefix) => `${prefix}${hidden}`);
   if (env.masked) {
-    for (const identity of env.identities) text = text.split(identity).join(accountHidden);
+    if (!publicIdentifier) for (const identity of env.identities) text = text.split(identity).join(accountHidden);
     text = text.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, () => accountHidden);
   }
   return text;
@@ -184,6 +185,7 @@ function connectionState(env) {
 
 function header(env, live) {
   const { view, t, msg } = env;
+  const usagePage = view.page === "usage";
   const connection = connectionState(env);
   const connectionColor = view.connection === "live" && connection.token === "done" ? t.live : t[connection.token];
   return v_flex().w_full().min_w(0).flex_none().px(14).py(14).gap(10).border_b(1).border_color(t.border)
@@ -191,38 +193,155 @@ function header(env, live) {
       .child(v_flex().min_w(0).flex_1().gap(4)
         .child(h_flex().items_center().gap(8)
           .child(div().font_semibold().text_size(18).child("Magpie"))
-          .child(div().text_color(t.muted).text_size(10).child(msg("ui.routing"))))
-        .child(h_flex().min_w(0).items_center().gap(5).role("status")
+          .child(div().text_color(t.muted).text_size(10).child(msg(usagePage ? "ui.accounting.title" : "ui.routing"))))
+        .when(!usagePage, el => el.child(h_flex().min_w(0).items_center().gap(5).role("status")
           .child(dot(env, connectionColor))
           .child(div().text_size(11).text_color(connectionColor).child(connection.label))
-          .when(live.length > 0, el => el.child(div().text_size(11).text_color(t.muted).child(msg("ui.header.active", { count: live.length }))))))
-      .child(button(env, "refresh", msg("ui.header.refresh"), cx => view.refresh(cx), { accessible: msg("ui.header.refreshAccessible") })))
+          .when(live.length > 0, el => el.child(div().text_size(11).text_color(t.muted).child(msg("ui.header.active", { count: live.length })))))))
+      .child(button(env, usagePage ? "accounting-refresh" : "refresh", msg(usagePage && view.accountingBusy ? "ui.accounting.reading" : "ui.header.refresh"),
+        cx => usagePage ? view.refreshAccounting(cx) : view.refresh(cx), {
+          disabled: usagePage && view.accountingBusy,
+          accessible: msg(usagePage ? "ui.accounting.refreshAccessible" : "ui.header.refreshAccessible"),
+        })))
+    .child(h_flex().w_full().min_w(0).p(3).gap(3).rounded(8).bg(t.chrome)
+      .child(button(env, "page-routing", msg("ui.routing"), cx => view.setPage("routing", cx), {
+        kind: "segment", selected: !usagePage, accessible: msg("ui.page.routingAccessible"),
+      }).flex_1())
+      .child(button(env, "page-usage", msg("ui.accounting.title"), cx => view.setPage("usage", cx), {
+        kind: "segment", selected: usagePage, accessible: msg("ui.page.usageAccessible"),
+      }).flex_1()))
     .child(h_flex().w_full().min_w(0).items_center().gap(7)
       .child(div().flex_none().text_size(10).text_color(t.muted).child(msg("ui.header.sourceSession")))
       .child(clipped(env, view.session ? shortSession(view.session) : msg("ui.header.unboundSession"), t.muted)
         .text_size(11).flex_1().tooltip(safeText(env, view.session, msg("ui.header.unboundSession")))))
     .child(h_flex().w_full().min_w(0).p(3).gap(3).rounded(8).bg(t.chrome)
       .child(button(env, "scope-session", msg("ui.scope.session"), cx => view.setScope("session", cx), {
-        kind: "segment", selected: view.scope === "session", accessible: msg("ui.scope.sessionAccessible"), tooltip: msg("ui.scope.sessionTooltip"),
+        kind: "segment", selected: view.scope === "session", accessible: msg("ui.scope.sessionAccessible"),
+        tooltip: msg(usagePage ? "ui.accounting.sessionTooltip" : "ui.scope.sessionTooltip"),
       }).flex_1())
-      .child(button(env, "scope-all", msg("ui.scope.all"), cx => view.setScope("all", cx), {
-        kind: "segment", selected: view.scope === "all", accessible: msg("ui.scope.allAccessible"), tooltip: msg("ui.scope.allTooltip"),
+      .child(button(env, "scope-all", msg(usagePage ? "ui.accounting.all" : "ui.scope.all"), cx => view.setScope("all", cx), {
+        kind: "segment", selected: view.scope === "all", accessible: msg(usagePage ? "ui.accounting.allAccessible" : "ui.scope.allAccessible"),
+        tooltip: msg(usagePage ? "ui.accounting.allTooltip" : "ui.scope.allTooltip"),
       }).flex_1()))
     .child(h_flex().w_full().min_w(0).items_center().gap(6)
-      .child(button(env, "adaptive", view.adaptiveOnly ? "codex-adaptive" : msg("ui.filter.allModels"), cx => view.toggleAdaptive(cx), {
+      .when(!usagePage, el => el.child(button(env, "adaptive", view.adaptiveOnly ? "codex-adaptive" : msg("ui.filter.allModels"), cx => view.toggleAdaptive(cx), {
         selected: view.adaptiveOnly, padding: 6, accessible: msg(view.adaptiveOnly ? "ui.filter.adaptiveAccessible" : "ui.filter.allAccessible"),
-      }).flex_1())
+      }).flex_1()))
+      .when(usagePage, el => el.child(button(env, "privacy", msg(env.masked ? "ui.privacy.masked" : "ui.privacy.visible"), cx => view.toggleMasked(cx), {
+        kind: "quiet", selected: env.masked, padding: 6, accessible: msg(env.masked ? "ui.privacy.maskedAccessible" : "ui.privacy.visibleAccessible"),
+      }).flex_1()))
       .child(button(env, "locale", msg("ui.locale.caption"), cx => view.toggleLocale(cx), {
         kind: "quiet", accessible: msg("ui.locale.accessible"), tooltip: msg("ui.locale.accessible"),
       }).flex_none()))
-    .child(h_flex().w_full().min_w(0).items_center().gap(6)
+    .when(!usagePage, el => el.child(h_flex().w_full().min_w(0).items_center().gap(6)
       .child(button(env, "privacy", msg(env.masked ? "ui.privacy.masked" : "ui.privacy.visible"), cx => view.toggleMasked(cx), {
         kind: "quiet", selected: env.masked, padding: 6, accessible: msg(env.masked ? "ui.privacy.maskedAccessible" : "ui.privacy.visibleAccessible"),
       }).flex_1())
       .child(button(env, "motion", msg(view.motion ? "ui.motion.on" : "ui.motion.off"), cx => view.toggleMotion(cx), {
         kind: "quiet", selected: view.motion, padding: 6, accessible: msg(view.motion ? "ui.motion.onAccessible" : "ui.motion.offAccessible"),
         tooltip: msg("ui.motion.tooltip"),
-      }).flex_1()));
+      }).flex_1())));
+}
+
+function accountingNumber(env, value) {
+  return compactNumber(value) ?? env.msg("ui.notReported");
+}
+
+function accountingPrice(env, metric) {
+  const { msg } = env;
+  const unpriced = finite(metric?.unpriced) && metric.unpriced >= 0 ? metric.unpriced : null;
+  const unavailable = !finite(metric?.cost) || metric.cost < 0;
+  return {
+    value: unavailable ? msg("ui.accounting.priceUnavailable")
+      : msg(metric.cost > 0 && metric.cost < 0.0001 ? "ui.accounting.usdTiny" : "ui.accounting.usd", { value: compactCost(metric.cost) }),
+    note: unpriced === null ? msg("ui.accounting.priceCoverageUnknown")
+      : unpriced > 0 ? msg("ui.accounting.unpriced", { count: accountingNumber(env, unpriced) }) : null,
+    label: msg(!unavailable && unpriced > 0 ? "ui.accounting.partialCost" : "ui.accounting.cost"),
+  };
+}
+
+function accountingExact(env, metric) {
+  const exact = value => finite(value) && value >= 0 ? env.number(value) : env.msg("ui.notReported");
+  return env.msg("ui.accounting.exactValues", {
+    calls: exact(metric.calls), tokens: exact(metric.totalTokens), input: exact(metric.input), output: exact(metric.output),
+    cacheRead: exact(metric.cacheRead), cacheWrite: exact(metric.cacheWrite), reasoning: exact(metric.reasoning),
+    cost: finite(metric.cost) && metric.cost >= 0 ? env.msg("ui.accounting.usd", { value: env.number(metric.cost) })
+      : env.msg("ui.accounting.priceUnavailable"),
+  });
+}
+
+function accountingMetric(env, label, value, prominent = false) {
+  return v_flex().min_w(0).flex_1().gap(4)
+    .child(line(env, label, env.t.muted).text_size(10))
+    .child(line(env, value).text_size(prominent ? 15 : 12).when(prominent, el => el.font_medium()));
+}
+
+function accountingPair(env, leftLabel, leftValue, rightLabel, rightValue, prominent = false) {
+  return h_flex().w_full().min_w(0).gap(12)
+    .child(accountingMetric(env, leftLabel, leftValue, prominent))
+    .child(accountingMetric(env, rightLabel, rightValue, prominent));
+}
+
+function accountingModel(env, model) {
+  const { msg, t } = env;
+  const price = accountingPrice(env, model);
+  const modelName = safeText(env, model.model, msg("ui.model.notReported"), true);
+  const providerName = safeText(env, model.provider, msg("ui.provider.notReported"), true);
+  return v_flex().w_full().min_w(0).flex_none().p(12).gap(12).rounded(10).border(1).border_color(t.border).bg(t.chrome)
+    .tooltip(accountingExact(env, model))
+    .child(v_flex().w_full().min_w(0).gap(5)
+      .child(brandedLine(env, modelName, modelIconPath(model.model) ?? providerIconPath(model.provider), 16).font_medium().text_size(13))
+      .child(h_flex().w_full().min_w(0).gap(8)
+        .child(line(env, providerName, t.muted).flex_1().text_size(11))
+        .child(line(env, msg("ui.accounting.modelCalls", { count: accountingNumber(env, model.calls) }), t.muted).flex_1().text_size(11))))
+    .child(accountingPair(env, msg("ui.accounting.tokens"), accountingNumber(env, model.totalTokens), price.label, price.value, true))
+    .when(Boolean(price.note), el => el.child(line(env, price.note, t.muted).text_size(10)))
+    .child(accountingPair(env, msg("ui.accounting.input"), accountingNumber(env, model.input), msg("ui.accounting.output"), accountingNumber(env, model.output)))
+    .child(accountingPair(env, msg("ui.accounting.cacheRead"), accountingNumber(env, model.cacheRead), msg("ui.accounting.cacheWrite"), accountingNumber(env, model.cacheWrite)))
+    .when(finite(model.cacheUnknown) && model.cacheUnknown > 0, el => el.child(line(env,
+      msg("ui.accounting.cacheUnknown", { count: accountingNumber(env, model.cacheUnknown) }), t.muted).text_size(10)))
+    .when(finite(model.reasoning) && model.reasoning > 0, el => el.child(line(env,
+      msg("ui.accounting.reasoning", { count: accountingNumber(env, model.reasoning) }), t.muted).text_size(10)));
+}
+
+function accountingPage(env) {
+  const { view, msg, t } = env;
+  const page = v_flex().w_full().min_w(0).flex_none().gap(14)
+    .child(section(env, msg("ui.accounting.title"), msg(view.scope === "all" ? "ui.accounting.scopeAll" : "ui.accounting.scopeSession")));
+  if (view.scope === "session" && !view.session) {
+    return page.child(notice(env, msg(view.bindingBusy ? "ui.notice.binding" : "ui.notice.unbound"), msg("ui.accounting.unbound")));
+  }
+  if (view.accountingError) {
+    page.child(notice(env, msg("ui.accounting.errorTitle"), safeText(env, view.accountingError), true));
+  }
+  const reading = view.accounting;
+  const accounting = reading?.scope === view.scope && (view.scope !== "session" || reading.session === view.session) ? reading : null;
+  if (!accounting) {
+    if (!view.accountingError) page.child(notice(env, msg(view.accountingBusy ? "ui.accounting.loading" : "ui.accounting.emptyTitle"),
+      msg(view.accountingBusy ? "ui.accounting.loadingHelp" : "ui.accounting.empty")));
+    return page;
+  }
+  if (accounting.totals?.calls === 0 && !list(accounting.models).length) {
+    return page.child(notice(env, msg("ui.accounting.emptyTitle"), msg("ui.accounting.empty")));
+  }
+  const metric = accounting.totals;
+  const price = accountingPrice(env, metric);
+  page.child(v_flex().w_full().min_w(0).flex_none().p(12).gap(12).rounded(10).border(1).border_color(t.border).bg(t.chrome)
+    .tooltip(accountingExact(env, metric))
+    .child(accountingPair(env, msg("ui.accounting.tokens"), accountingNumber(env, metric?.totalTokens), price.label, price.value, true))
+    .when(Boolean(price.note), el => el.child(line(env, price.note, t.muted).text_size(10)))
+    .child(line(env, msg("ui.accounting.modelCalls", { count: accountingNumber(env, metric?.calls) }), t.muted).text_size(11))
+    .when(Boolean(scalar(accounting.since)), el => el.child(line(env, msg("ui.usage.since", {
+      time: safeText(env, env.date(accounting.since)),
+    }), t.muted).text_size(10)))
+    .when(view.accountingBusy, el => el.child(line(env, msg("ui.accounting.loading"), t.muted).text_size(10))));
+  page.child(line(env, msg("ui.accounting.disclaimer"), t.muted).text_size(10));
+  const models = list(accounting.models);
+  page.child(section(env, msg("ui.accounting.models"), msg("ui.accounting.tokenDefinition")))
+    .child(line(env, msg("ui.accounting.units"), t.muted).text_size(10))
+    .children(models.map(model => accountingModel(env, model)))
+    .when(models.length === 0, el => el.child(notice(env, msg("ui.accounting.emptyTitle"), msg("ui.accounting.empty"))));
+  return page;
 }
 
 function usageSummary(env) {
@@ -676,27 +795,32 @@ export function renderRouting(view, cx) {
     identities: privacyValues(view, routes), width: finite(view.graphWidth) && view.graphWidth > 0 ? view.graphWidth : 420,
     animate: view.connection === "live" && view.motion === true };
   const headerNode = header(env, live);
-  const content = v_flex().id("magpie-routing-scroll").w_full().min_w(0).min_h(0).flex_1()
+  const usagePage = view.page === "usage";
+  const content = v_flex().id(usagePage ? "magpie-accounting-scroll" : "magpie-routing-scroll").w_full().min_w(0).min_h(0).flex_1()
     .overflow_y_scrollbar().px(14).py(14).gap(18);
-  if (view.configError || view.error) {
-    content.child(notice(env, env.msg(view.configError ? "ui.notice.configUnavailable" : "ui.notice.routingReadFailed"),
-      safeText(env, view.configError || view.error), true));
+  if (usagePage) {
+    content.child(accountingPage(env));
+  } else {
+    if (view.configError || view.error) {
+      content.child(notice(env, env.msg(view.configError ? "ui.notice.configUnavailable" : "ui.notice.routingReadFailed"),
+        safeText(env, view.configError || view.error), true));
+    }
+    if (view.connection === "offline" && routes.length > 0) {
+      content.child(notice(env, env.msg("ui.notice.lastObserved"), env.msg("ui.notice.offline")));
+    }
+    if (view.scope === "session" && !view.session) {
+      content.child(notice(env, env.msg(view.bindingBusy ? "ui.notice.binding" : "ui.notice.unbound"),
+        safeText(env, view.reason, env.msg("ui.notice.bindingHelp"))));
+    } else if (view.connection === "connecting" && routes.length === 0) {
+      content.child(notice(env, env.msg("ui.notice.connecting"), env.msg("ui.notice.awaitingRequests")));
+    }
+    content.child(usageSummary(env));
+    content.child(renderRoutingGraph(env, routes, selected));
+    content.child(requests(env, env.msg("ui.requests.active"), live, env.msg("ui.requests.noneActive")));
+    content.child(quotas(env));
+    content.child(classifierSection(env, routes, selected));
+    content.child(recentRequests(env, recent));
   }
-  if (view.connection === "offline" && routes.length > 0) {
-    content.child(notice(env, env.msg("ui.notice.lastObserved"), env.msg("ui.notice.offline")));
-  }
-  if (view.scope === "session" && !view.session) {
-    content.child(notice(env, env.msg(view.bindingBusy ? "ui.notice.binding" : "ui.notice.unbound"),
-      safeText(env, view.reason, env.msg("ui.notice.bindingHelp"))));
-  } else if (view.connection === "connecting" && routes.length === 0) {
-    content.child(notice(env, env.msg("ui.notice.connecting"), env.msg("ui.notice.awaitingRequests")));
-  }
-  content.child(usageSummary(env));
-  content.child(renderRoutingGraph(env, routes, selected));
-  content.child(requests(env, env.msg("ui.requests.active"), live, env.msg("ui.requests.noneActive")));
-  content.child(quotas(env));
-  content.child(classifierSection(env, routes, selected));
-  content.child(recentRequests(env, recent));
   const root = v_flex().id("magpie-routing").size_full().min_w(0).min_h(0).bg(t.surface)
     .text_color(t.foreground).text_size(12).line_height(1.4)
     .on_size_change((size, nextCx) => {
@@ -705,6 +829,6 @@ export function renderRouting(view, cx) {
         nextCx.notify();
       }
     })
-    .child(headerNode).child(content).child(footer(env));
+    .child(headerNode).child(content).when(!usagePage, el => el.child(footer(env)));
   return root;
 }
