@@ -1,0 +1,67 @@
+# Herdr Magpie Route
+
+A native right sidebar that shows where a local OMP request goes through Magpie, the model that actually answers, and global account quotas. English is the default, with an explicit Simplified Chinese switch.
+
+![Herdr Magpie Route](preview.png)
+
+## What you see
+
+A resizable 420px sidebar, minimum 340px and maximum 680px. Surface and text follow the host theme. Use a quiet 10px radius, thin theme borders, 14px outer insets and 18px section gaps. The title is 18px; section headings 13px, model/body text 12px, metadata 11px and captions 10px.
+
+Top to bottom:
+
+1. Magpie title, connection state, refresh and the shortened source session.
+2. Current-session/all-request segmented scope, model filter, language switch, account-identity and motion controls.
+3. A routing card: OMP sources on the left and individual model/effort destinations on the right. Keep at least 24px between node columns after subtracting layout/card padding at the minimum width. Do not insert a central gateway box.
+4. Live request rows, expandable per-request details and attempt/candidate records.
+5. Global provider quota cards, cached reading/reset timestamps and explicit refresh.
+6. Three recent request rows by default, with expand/collapse and five rows per page when expanded.
+7. A compact footer with global request/reroute/error totals and the cache-history limit.
+
+Model-family and provider icons are independent. A GPT model routed through another provider keeps its OpenAI model mark and the provider's own mark. Unknown families retain their text without a fabricated brand. Single-color marks use theme-tinted native SVG masks; colored marks keep their source colors.
+
+## How it behaves
+
+A live request has an active destination and native moving points along its observed path. Candidate-only routes are dashed and do not animate. Success, failure, cancellation and ended/continued attempts have distinct text labels as well as theme-derived colors. These are gateway request states; do not infer them from the terminal agent's working/idle status.
+
+Clicking a request toggles details and pins its observed route. Scope/model changes clear the old selection and reset recent-history pagination. Changing the terminal tab resets session-scoped browsing; global pagination stays on the same page. Clamp pages when the retained cache shrinks. Live requests are not paginated.
+
+The English/Chinese toggle is persisted with localStorage and updates existing diagnostic descriptors without changing filters, selection or pagination. Translate labels, tooltips, accessibility text, privacy markers, plural counts and date/number formatting. Keep model/provider identifiers and raw upstream data unchanged.
+
+Refresh restarts stream reading and session binding. Automatic quota reads use cached gateway results; explicit quota refresh can contact upstream providers through Magpie. Disable refresh controls while their corresponding operation is busy. Keep hover, press, selected and keyboard-focus states visible without moving layout bounds.
+
+When the gateway is offline, disclose cached/stale results. When session binding is unavailable, explain why and retain all-request browsing. Empty, missing, text-only, unlimited and failed quotas remain distinct; never invent 0% usage. Account identities start hidden. Motion can be disabled.
+
+## Built from
+
+Distribution tree: `mods/magpie-route/` contains `main.js`, `route-view.js`, `routing-graph.js`, `routing-data.js`, `i18n.js`, `locales/`, `resolve-session.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
+
+Place a block with ID `magpie-route-panel` and `content.mod: magpie-route` beside the active terminal area in a user-owned horizontal layout row. The manifest is focusable and has `place: none`. The mod reads no pane props.
+
+Herdr APIs: View, native div/flex/Button/Progress primitives, focus handles, timers and spawned work; layout/spaces/panes/terminals/focused; home/appHome/readTextFile/exec/nextCommand/theme. Graph curves use PathBuilder/window.paint_path and native frame animation. No DOM, browser engine, Node APIs or runtime npm dependencies are involved.
+
+Data comes from Magpie's loopback trace and quota endpoints. The Python standard-library resolver invokes hc and lsof, confirms foreground process identity twice and accepts only a uniquely open root OMP session. It reads bounded leading metadata rather than whole conversations. See README for exact commands, paths and privacy behavior.
+
+Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometric OMP pi marker. See THIRD_PARTY_NOTICES.md.
+
+## Watch out
+
+- Verified with Herdr App 0.1.15 on macOS. Do not claim Windows support or an unverified minimum Magpie version.
+- Keep both the folder name magpie-route and layout node ID magpie-route-panel, or update helper/asset paths and visibility detection together.
+- Default model filtering targets codex-adaptive; allow switching to all models.
+- Session identity is local and exact. Never guess it from directory, model, account, session age or tab title; refuse remote/ambiguous sources.
+- Gateway cache retention is authoritative. Do not truncate active routes to a guessed fixed row limit.
+- Do not add the trace wait query: any nonempty value can hold the server call for 25 seconds.
+- Idle/candidate/finished edges do not move. Keep native motion independent of polling and share path/frame resources per view.
+- English text is often longer than Chinese. Compute node heights from wrapped localized text and preserve model legibility at 340px.
+- Do not redistribute settings, credentials, sessions, generated host SDK files or personal layouts. Redact any preview capture.
+
+## Done when
+
+- Herdr's mod check passes and the block appears in a personal layout.
+- Current-session filtering matches the foreground local OMP session exactly; all-request browsing works when binding is unavailable.
+- Observed live paths animate; candidates and completed paths do not.
+- Model/provider marks remain distinct and legible in the host theme.
+- Recent preview, expansion, page bounds, shrink-clamping and filter resets work.
+- Both language catalogs have matching keys/placeholders, existing notices switch language, and 340px/680px layouts show complete controls and model identities.
+- Quotas remain global, unknown values stay unknown, and private identities stay masked by default.

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Original geometric pi monogram; not an official OMP brand asset. -->
+  <defs>
+    <linearGradient id="omp-mark" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#ed4abf" />
+      <stop offset="1" stop-color="#8d6dff" />
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#15111d" />
+  <path d="M7 8h19v4h-4v14h-4V12h-5v10H9V12H7z" fill="url(#omp-mark)" />
+</svg>
