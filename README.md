@@ -4,7 +4,9 @@ A native [Herdr](https://herdr.dev) sidebar for [Magpie](https://github.com/yeto
 
 [简体中文](README.zh-CN.md) · [Rebuild recipe](RECIPE.md)
 
-![Herdr Magpie Route](preview.png)
+![Live native routing from OMP to model branches](preview.gif)
+
+Recorded from real gateway requests, with moving points on active paths and distinct candidate/completed states. [Full sidebar screenshot](preview.png). Session identifiers are removed.
 
 ## Features
 

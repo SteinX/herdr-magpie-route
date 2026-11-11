@@ -4,7 +4,9 @@
 
 [English](README.md) · [重建说明](RECIPE.md)
 
-![Herdr Magpie Route](preview.png)
+![OMP 分流到模型分支的原生路由动图](preview.gif)
+
+录制自真实网关请求，可看到活动路径上的流动光点，以及候选、已完成分支的不同状态。[完整侧栏截图](preview.png)。会话标识已脱敏。
 
 ## 功能
 
