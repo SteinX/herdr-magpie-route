@@ -215,9 +215,10 @@ function modelFilterDropdown(env, filterGroup) {
   const menuHandle = view.focusHandles.get("adaptive-menu");
   const highlightIndex = Math.max(0, Math.min(Number.isInteger(view.modelFilterIndex) ? view.modelFilterIndex : 0, Math.max(0, options.length - 1)));
   const menuWidth = Math.max(180, Math.min(320, Math.round((env.width || 340) - 28)));
-  const menu = v_flex().id("magpie-model-filter-menu").w(menuWidth).max_h(240).p(4).gap(2)
+  const menuHeight = Math.min(238, 8 + options.length * 28 + Math.max(0, options.length - 1) * 2 + (options.length <= 1 ? 26 : 0));
+  const menu = v_flex().id("magpie-model-filter-menu").w(menuWidth)
     .track_focus(menuHandle).tab_index(0).role("list_box").accessibility_label(msg("ui.filter.menuAccessible"))
-    .rounded(8).border(1).border_color(t.border).bg(t.popover ?? t.surface).overflow_y_scrollbar()
+    .rounded(8).border(1).border_color(t.border).bg(t.popover ?? t.surface)
     .on_mouse_down_out((_event, cx) => view.closeModelFilterMenu(cx, false))
     .on_scroll_wheel((_event, cx) => cx.stop_propagation())
     .on_key_down((event, cx) => {
@@ -236,13 +237,14 @@ function modelFilterDropdown(env, filterGroup) {
         view.closeModelFilterMenu(cx, true);
       }
     })
+    .child(v_flex().id("magpie-model-filter-scroll").h(menuHeight).p(4).gap(2).overflow_y_scrollbar()
     .children(options.map((option, index) => {
       const isAll = option === "all";
       const optionLabel = isAll ? msg("ui.filter.allModels") : shortGroup(option);
       const isSelected = option === current;
       const isHighlighted = index === highlightIndex;
       const optionAccessible = isAll ? msg("ui.filter.selectAllAccessible") : msg("ui.filter.selectGroupAccessible", { group: optionLabel });
-      return h_flex().id(`magpie-model-filter-option-${encodeURIComponent(option)}`).w_full().min_w(0).h(28).px(8).gap(6)
+      return h_flex().id(`magpie-model-filter-option-${encodeURIComponent(option)}`).w_full().min_w(0).h(28).flex_none().px(8).gap(6)
         .items_center().justify_between()
         .role("list_box_option").aria_selected(isSelected).set_position(index + 1, options.length)
         .when(isHighlighted, el => el.aria_active_descendant())
@@ -262,8 +264,8 @@ function modelFilterDropdown(env, filterGroup) {
         .child(div().min_w(0).flex_1().truncate().child(optionLabel))
         .when(isSelected, el => el.child(div().flex_none().text_size(10).text_color(t.accent).child("✓")));
     }))
-    .when(options.length <= 1, el => el.child(div().w_full().min_w(0).px(8).py(4).text_size(10).text_color(t.muted).child(msg("ui.filter.noGroups"))));
-  return Popup.new("magpie-model-filter-popup", trigger).anchor("bottom_left").flex_1().min_w(0).flex()
+    .when(options.length <= 1, el => el.child(div().w_full().min_w(0).flex_none().px(8).py(4).text_size(10).text_color(t.muted).child(msg("ui.filter.noGroups")))));
+  return Popup.new("magpie-model-filter-popup", trigger).anchor("top_left").flex_1().min_w(0).flex()
     .when(open, el => el.content(menu));
 }
 function header(env, live) {

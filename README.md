@@ -73,7 +73,7 @@ These examples use the `herdr-app` CLI. If it is not on PATH, use the executable
 
 ## Use
 
-Choose a local OMP tab for **Current session**, or select **All requests** to browse the gateway's retained cache. Open the model filter dropdown to choose **All models** or any active routing group (such as `codex-gemini-adaptive` or `codex-adaptive`) directly.
+Choose a local OMP tab for **Current session**, or select **All requests** to browse the gateway's retained cache. Open the model filter dropdown to choose **All models** or any active routing group (such as `codex-gemini-adaptive` or `codex-adaptive`) directly. Scroll inside the menu when the list exceeds its height.
 
 The **Routing / Usage & cost** tabs share the current-session/all scope selector and remember the chosen page. Connection status and **Refresh** stay visible in the same header positions on both pages, including while usage is loading. Usage & cost reads the persisted gateway-call ledger, refreshes every 30 seconds or on demand, and groups all models by provider/model. It is independent of the routing model filter. Total tokens are `input + output + cache_read + cache_write`; reasoning is already included in output. Handed-on attempts contribute tokens and cost without counting as another request. Token/call counts use decimal K/M/B/T units; summary, model and cache hover details use the same compact units.
 
