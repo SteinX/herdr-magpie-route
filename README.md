@@ -4,9 +4,9 @@ A native [Herdr](https://herdr.dev) sidebar for [Magpie](https://github.com/yeto
 
 [简体中文](README.zh-CN.md) · [Rebuild recipe](RECIPE.md)
 
-![Live native routing from OMP to model branches](preview.gif)
+![Herdr Magpie Route native sidebar overview](preview.png)
 
-Recorded from real gateway requests, with moving points on active paths and distinct candidate/completed states. [Full sidebar screenshot](preview.png). Session identifiers are removed.
+Native interface with illustrative demo data (synthetic session, metrics and masked accounts; no personal or live account data). Full-size captures: [Routing & cache](screenshots/routing.png) · [Group filter & quotas](screenshots/group-filter-quotas.png) · [Usage & cost](screenshots/usage-cost.png) · [Arrange panels](screenshots/arrange.png) · [Expanded classifier](screenshots/classifier.png).
 
 ## Features
 
@@ -61,7 +61,7 @@ Keep the folder name `magpie-route`. Add this block beside the terminal block in
 
 The row should allow resizing. The node ID must remain `magpie-route-panel` because the mod uses it to suspend work while hidden. Copying files alone does not dock the panel: its manifest uses `place: none`.
 
-Clone a shipped layout before changing its structure; do not edit Herdr's shipped files. Keep `RECIPE.md` and `preview.png` in the repository, outside the installed mod folder.
+Clone a shipped layout before changing its structure; do not edit Herdr's shipped files. Keep `RECIPE.md`, `preview.png` and `screenshots/` in the repository, outside the installed mod folder.
 
 Validate the installed mod:
 
@@ -105,7 +105,7 @@ The mod:
 - Reduces Usage responses immediately to aggregate/model counters and the recording start; session, account, key and file-path fields are discarded.
 - Narrows accounting pages immediately to token/price counters, matching the linked session locally; raw ledger rows, account/key metadata and response IDs are not retained in view state.
 
-The request list is the gateway's recent cache, not a complete session archive. No telemetry or external icon downloads occur at runtime. This repository contains no user settings, account credentials, session files or personal layouts. The preview is a redacted capture of the native panel.
+The request list is the gateway's recent cache, not a complete session archive. No telemetry or external icon downloads occur at runtime. This repository contains no user settings, account credentials, session files or personal layouts. The preview images render the native panel with synthetic demo data and masked accounts.
 
 ## Development
 

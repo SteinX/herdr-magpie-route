@@ -4,6 +4,8 @@ A native right sidebar that shows where a local OMP request goes through Magpie,
 
 ![Herdr Magpie Route](preview.png)
 
+Native interface with illustrative demo data; individual panel captures live in [`screenshots/`](screenshots/).
+
 ## What you see
 
 A resizable 420px sidebar, minimum 340px and maximum 680px. Surface and text follow the host theme. Use a quiet 10px radius, thin theme borders, 14px outer insets and 18px section gaps. The title is 18px; section headings 13px, model/body text 12px, metadata 11px and captions 10px.
@@ -66,7 +68,7 @@ Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometri
 - Do not add the trace wait query: any nonempty value can hold the server call for 25 seconds.
 - Idle/candidate/finished edges do not move. Keep native motion independent of polling and share path/frame resources per view.
 - English text is often longer than Chinese. Compute node heights from wrapped localized text and preserve model legibility at 340px.
-- Do not redistribute settings, credentials, sessions, generated host SDK files or personal layouts. Redact any preview capture.
+- Do not redistribute settings, credentials, sessions, generated host SDK files or personal layouts. Render repository previews from synthetic demo data or redact any capture.
 
 ## Done when
 

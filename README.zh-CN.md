@@ -4,9 +4,9 @@
 
 [English](README.md) · [重建说明](RECIPE.md)
 
-![OMP 分流到模型分支的原生路由动图](preview.gif)
+![Herdr Magpie Route 原生侧栏总览](preview.png)
 
-录制自真实网关请求，可看到活动路径上的流动光点，以及候选、已完成分支的不同状态。[完整侧栏截图](preview.png)。会话标识已脱敏。
+原生界面配合演示用合成数据渲染（示例会话、指标与已隐藏账户，不包含任何个人或真实账户数据）。单张清晰大图：[路由与缓存](screenshots/routing.png) · [路由组菜单与额度](screenshots/group-filter-quotas.png) · [用量与费用](screenshots/usage-cost.png) · [面板排序](screenshots/arrange.png) · [展开的 Classifier](screenshots/classifier.png)。
 
 ## 功能
 
@@ -47,7 +47,7 @@
 
 保持目录名 `magpie-route` 和节点 ID `magpie-route-panel`；插件依赖它们定位资源和判断显隐。manifest 为 `place: none`，仅复制文件不会自动停靠。修改官方布局前先克隆，不要修改 Herdr 自带文件。
 
-用 `herdr-app check` 检查安装目录；命令不在 PATH 时，使用 Herdr.app 内的可执行文件和相同参数。个人 mod 支持热加载，无需重启。RECIPE.md 和 preview.png 留在仓库，不复制到安装目录。
+用 `herdr-app check` 检查安装目录；命令不在 PATH 时，使用 Herdr.app 内的可执行文件和相同参数。个人 mod 支持热加载，无需重启。`RECIPE.md`、`preview.png` 和 `screenshots/` 留在仓库，不复制到安装目录。
 
 ## 使用
 
@@ -77,7 +77,7 @@ Classifier 区域位于账户额度下方、最近请求上方，默认折叠。
 - 用量响应立即收窄为整体/模型计数与记录起始时间，不保留其中的会话、账户、Key 和文件路径字段。
 - 费用页逐页收窄为 token 与价格计数，仅用关联会话做本地精确匹配，不在界面状态中保留原始账本行、账户/Key 元数据或响应 ID。
 
-列表反映网关近期缓存，不是完整会话档案。运行时没有遥测或外部图标下载。仓库不包含个人布局、设置、凭据或会话文件；预览图已经脱敏。
+列表反映网关近期缓存，不是完整会话档案。运行时没有遥测或外部图标下载。仓库不包含个人布局、设置、凭据或会话文件；预览图由原生面板配合合成演示数据生成，账户标识默认隐藏。
 
 ## 许可
 
