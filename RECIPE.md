@@ -60,7 +60,7 @@ Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometri
 
 - Verified with Herdr App 0.1.15 on macOS. Do not claim Windows support or an unverified minimum Magpie version.
 - Keep both the folder name magpie-route and layout node ID magpie-route-panel, or update helper/asset paths and visibility detection together.
-- Model filtering cycles through active routing groups reported by Magpie (configured `/v1/models` groups first, then observed trace groups) and all models.
+- Model filtering offers a dropdown menu to directly select all models or any active routing group reported by Magpie (configured `/v1/models` groups first, then observed trace groups).
 - Session identity is local and exact. Never guess it from directory, model, account, session age or tab title; refuse remote/ambiguous sources.
 - Gateway cache retention is authoritative. Do not truncate active routes to a guessed fixed row limit.
 - Do not add the trace wait query: any nonempty value can hold the server call for 25 seconds.

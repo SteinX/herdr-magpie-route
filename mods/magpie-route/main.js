@@ -82,7 +82,8 @@ export default class MagpieRoute extends View {
     this.scope = "session";
     const savedFilter = localStorage.getItem("model-filter");
     this.modelFilter = nonempty(savedFilter) ? savedFilter.trim() : "all";
-    this.modelFilterCycle = null;
+    this.modelFilterOpen = false;
+    this.modelFilterIndex = 0;
     this.masked = localStorage.getItem("masked") !== "false";
     this.motion = localStorage.getItem("motion") !== "false";
     this.selectedId = null;
@@ -93,7 +94,7 @@ export default class MagpieRoute extends View {
     this.graphWidth = 360;
     // One view owns immutable graph paths and synchronized frames across visual redraws.
     this._routingGraphCache = { paths: new Map(), frames: null };
-    this.focusHandles = new Map(["refresh", "scope-session", "scope-all", "adaptive", "privacy", "motion", "locale", "quota-refresh",
+    this.focusHandles = new Map(["refresh", "scope-session", "scope-all", "adaptive", "adaptive-menu", "privacy", "motion", "locale", "quota-refresh",
       "usage-refresh", "page-routing", "page-usage", "accounting-refresh", "classifier-toggle", "recent-toggle", "recent-prev", "recent-next",
       "order-toggle", "order-reset"]
       .map(key => [key, cx.focus_handle()]));
@@ -129,7 +130,7 @@ export default class MagpieRoute extends View {
         else if (command === "order-reset") this.resetPanelOrder(cx);
         else if (command === "scope-session") this.setScope("session", cx);
         else if (command === "scope-all") this.setScope("all", cx);
-        else if (command === "model-filter") this.cycleModelFilter(cx);
+        else if (command === "model-filter") this.toggleModelFilterMenu(cx);
       }
     });
   }
@@ -190,6 +191,7 @@ export default class MagpieRoute extends View {
 
   hide() {
     this.cancelPanelDrag();
+    this.modelFilterOpen = false;
     if (!this.visible) return;
     this.visible = false;
     this.target = null;
@@ -407,6 +409,7 @@ export default class MagpieRoute extends View {
 
   refresh(cx) {
     if (!this.visible || this.closed) return;
+    this.modelFilterOpen = false;
     this.streamGeneration++;
     this.port = null;
     this.trace = emptyTrace();
@@ -493,6 +496,7 @@ export default class MagpieRoute extends View {
   setPage(page, cx) {
     if ((page !== "routing" && page !== "usage") || page === this.page) return;
     this.cancelPanelDrag();
+    this.modelFilterOpen = false;
     this.page = page;
     localStorage.setItem("page", page);
     // Leaving the page invalidates pending replies without disturbing terminal binding.
@@ -518,6 +522,7 @@ export default class MagpieRoute extends View {
   togglePanelEditing(cx) {
     if (this.closed) return;
     this.cancelPanelDrag();
+    this.modelFilterOpen = false;
     this.editingPanels = !this.editingPanels;
     cx.notify();
   }
@@ -620,6 +625,14 @@ export default class MagpieRoute extends View {
     return availableGroups(this.trace, this.groups);
   }
 
+  modelFilterOptions() {
+    const groups = this.modelGroups();
+    const current = nonempty(this.modelFilter) ? this.modelFilter.trim() : "all";
+    const options = ["all", ...groups];
+    if (current !== "all" && !options.includes(current)) options.push(current);
+    return options;
+  }
+
   routes() {
     return filterRoutes(this.trace, { scope: this.scope, session: this.session, modelFilter: this.modelFilter });
   }
@@ -671,16 +684,57 @@ export default class MagpieRoute extends View {
     cx.notify();
   }
 
-  cycleModelFilter(cx) {
-    // Keep this pass fixed while live traces and configured groups are refreshed.
-    if (this.modelFilterCycle === null) this.modelFilterCycle = ["all", ...this.modelGroups()];
-    const options = this.modelFilterCycle;
-    const index = options.indexOf(this.modelFilter);
-    this.modelFilter = index >= 0 ? options[(index + 1) % options.length] : "all";
-    if (this.modelFilter === "all") this.modelFilterCycle = null;
-    localStorage.setItem("model-filter", this.modelFilter);
-    this.selectedId = null;
-    this.resetRecent();
+  toggleModelFilterMenu(cx) {
+    if (this.closed) return;
+    if (this.page !== "routing") {
+      this.cancelPanelDrag();
+      this.page = "routing";
+      localStorage.setItem("page", "routing");
+      this.accountingGeneration++;
+      this.pollUsage(cx);
+    }
+    if (this.editingPanels) this.editingPanels = false;
+    this.modelFilterOpen = !this.modelFilterOpen;
+    if (this.modelFilterOpen) {
+      const options = this.modelFilterOptions();
+      const index = options.indexOf(this.modelFilter);
+      this.modelFilterIndex = index >= 0 ? index : 0;
+      this.focusHandles.get("adaptive-menu")?.focus();
+    } else {
+      this.focusHandles.get("adaptive")?.focus();
+    }
+    cx.notify();
+  }
+
+  closeModelFilterMenu(cx, restoreFocus = false) {
+    if (!this.modelFilterOpen) return;
+    this.modelFilterOpen = false;
+    if (restoreFocus) this.focusHandles.get("adaptive")?.focus();
+    cx.notify();
+  }
+
+  moveModelFilterHighlight(delta, cx) {
+    if (!this.modelFilterOpen) return;
+    const options = this.modelFilterOptions();
+    if (!options.length) return;
+    const current = Number.isInteger(this.modelFilterIndex) ? this.modelFilterIndex : 0;
+    this.modelFilterIndex = (current + delta + options.length) % options.length;
+    cx.notify();
+  }
+
+  selectModelFilter(value, cx) {
+    const options = this.modelFilterOptions();
+    const next = nonempty(value) && options.includes(value.trim()) ? value.trim() : "all";
+    const changed = next !== this.modelFilter;
+    this.modelFilter = next;
+    this.modelFilterOpen = false;
+    this.modelFilterIndex = Math.max(0, options.indexOf(next));
+    if (changed) {
+      localStorage.setItem("model-filter", this.modelFilter);
+      this.selectedId = null;
+      this.resetRecent();
+    }
+    this.focusHandles.get("adaptive")?.focus();
     cx.notify();
   }
 

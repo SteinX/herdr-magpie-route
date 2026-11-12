@@ -73,7 +73,7 @@ These examples use the `herdr-app` CLI. If it is not on PATH, use the executable
 
 ## Use
 
-Choose a local OMP tab for **Current session**, or select **All requests** to browse the gateway's retained cache. Click the model filter button to cycle through your active routing groups (such as `codex-gemini-adaptive` or `codex-adaptive`) and **All models**.
+Choose a local OMP tab for **Current session**, or select **All requests** to browse the gateway's retained cache. Open the model filter dropdown to choose **All models** or any active routing group (such as `codex-gemini-adaptive` or `codex-adaptive`) directly.
 
 The **Routing / Usage & cost** tabs share the current-session/all scope selector and remember the chosen page. Connection status and **Refresh** stay visible in the same header positions on both pages, including while usage is loading. Usage & cost reads the persisted gateway-call ledger, refreshes every 30 seconds or on demand, and groups all models by provider/model. It is independent of the routing model filter. Total tokens are `input + output + cache_read + cache_write`; reasoning is already included in output. Handed-on attempts contribute tokens and cost without counting as another request. Token/call counts use decimal K/M/B/T units; summary, model and cache hover details use the same compact units.
 
@@ -91,7 +91,7 @@ The language button shows **中文** in English and **EN** in Chinese. It change
 
 Quotas are global: changing session or model filters does not narrow the quota cards. Automatic reads use gateway cache; **Refresh quotas** explicitly asks the gateway to refresh provider readings. Unknown quota is never displayed as zero usage.
 
-Native mod commands `magpie-route.refresh`, `magpie-route.locale`, `magpie-route.routing`, `magpie-route.usage`, `magpie-route.scope-session`, `magpie-route.scope-all`, `magpie-route.model-filter`, `magpie-route.arrange` and `magpie-route.order-reset` can be invoked with `herdr-app do` or assigned keys in your own `keys.json`. The model-filter command cycles the saved routing-group selection; the locale command toggles the saved language preference.
+Native mod commands `magpie-route.refresh`, `magpie-route.locale`, `magpie-route.routing`, `magpie-route.usage`, `magpie-route.scope-session`, `magpie-route.scope-all`, `magpie-route.model-filter`, `magpie-route.arrange` and `magpie-route.order-reset` can be invoked with `herdr-app do` or assigned keys in your own `keys.json`. The model-filter command opens or closes the routing-group dropdown; the locale command toggles the saved language preference.
 
 ## Data access and privacy
 

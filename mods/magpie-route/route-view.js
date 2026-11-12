@@ -1,5 +1,5 @@
 import { div } from "gpui-kit";
-import { Button, Progress, ProgressTrack, ProgressIndicator, h_flex, v_flex } from "gpui-base";
+import { Button, Popup, Progress, ProgressTrack, ProgressIndicator, h_flex, v_flex } from "gpui-base";
 import { theme } from "herdr";
 import { renderRoutingGraph } from "./routing-graph.js";
 import { brandIcon, modelIconPath, providerIconPath } from "./brand-icons.js";
@@ -185,6 +185,87 @@ function connectionState(env) {
   }[view.connection] ?? { label: env.msg("ui.connection.waiting"), token: "muted" };
 }
 
+
+function modelFilterDropdown(env, filterGroup) {
+  const { view, t, msg } = env;
+  const open = view.modelFilterOpen === true;
+  const options = view.modelFilterOptions();
+  const current = scalar(view.modelFilter) && view.modelFilter !== "all" ? view.modelFilter : "all";
+  const label = filterGroup || msg("ui.filter.allModels");
+  const accessible = filterGroup ? msg("ui.filter.groupAccessible", { group: filterGroup }) : msg("ui.filter.allAccessible");
+  const trigger = button(env, "adaptive", label, cx => view.toggleModelFilterMenu(cx), {
+    selected: Boolean(filterGroup) || open,
+    padding: 8,
+    accessible,
+    tooltip: open ? false : accessible,
+    custom: true,
+  }).w_full().min_w(0).flex_1().justify_between()
+    .on_key_down((event, cx) => {
+      const key = event.keystroke ?? event.key;
+      if (!open && (key === "down" || key === "up")) {
+        cx.stop_propagation();
+        view.toggleModelFilterMenu(cx);
+      } else if (open && key === "escape") {
+        cx.stop_propagation();
+        view.closeModelFilterMenu(cx, true);
+      }
+    })
+    .child(div().min_w(0).flex_1().truncate().child(label))
+    .child(div().flex_none().text_size(10).text_color(open || filterGroup ? t.accent : t.muted).child(open ? "▴" : "▾"));
+  const menuHandle = view.focusHandles.get("adaptive-menu");
+  const highlightIndex = Math.max(0, Math.min(Number.isInteger(view.modelFilterIndex) ? view.modelFilterIndex : 0, Math.max(0, options.length - 1)));
+  const menuWidth = Math.max(180, Math.min(320, Math.round((env.width || 340) - 28)));
+  const menu = v_flex().id("magpie-model-filter-menu").w(menuWidth).max_h(240).p(4).gap(2)
+    .track_focus(menuHandle).tab_index(0).role("list_box").accessibility_label(msg("ui.filter.menuAccessible"))
+    .rounded(8).border(1).border_color(t.border).bg(t.popover ?? t.surface).overflow_y_scrollbar()
+    .on_mouse_down_out((_event, cx) => view.closeModelFilterMenu(cx, false))
+    .on_scroll_wheel((_event, cx) => cx.stop_propagation())
+    .on_key_down((event, cx) => {
+      const key = event.keystroke ?? event.key;
+      if (key === "down") {
+        cx.stop_propagation();
+        view.moveModelFilterHighlight(1, cx);
+      } else if (key === "up") {
+        cx.stop_propagation();
+        view.moveModelFilterHighlight(-1, cx);
+      } else if (key === "enter" || key === "space" || key === " ") {
+        cx.stop_propagation();
+        view.selectModelFilter(options[highlightIndex] ?? "all", cx);
+      } else if (key === "escape") {
+        cx.stop_propagation();
+        view.closeModelFilterMenu(cx, true);
+      }
+    })
+    .children(options.map((option, index) => {
+      const isAll = option === "all";
+      const optionLabel = isAll ? msg("ui.filter.allModels") : shortGroup(option);
+      const isSelected = option === current;
+      const isHighlighted = index === highlightIndex;
+      const optionAccessible = isAll ? msg("ui.filter.selectAllAccessible") : msg("ui.filter.selectGroupAccessible", { group: optionLabel });
+      return h_flex().id(`magpie-model-filter-option-${encodeURIComponent(option)}`).w_full().min_w(0).h(28).px(8).gap(6)
+        .items_center().justify_between()
+        .role("list_box_option").aria_selected(isSelected).set_position(index + 1, options.length)
+        .when(isHighlighted, el => el.aria_active_descendant())
+        .rounded(6).border(1).border_color(isHighlighted && menuHandle?.is_focused() ? t.accent : isSelected ? t.border : "#00000000")
+        .bg(isSelected ? t.raised : isHighlighted ? t.hover : "#00000000")
+        .text_size(11).text_color(isSelected ? t.accent : t.foreground)
+        .cursor_pointer()
+        .hover(el => el.bg(t.hover))
+        .active(el => el.bg(t.raised))
+        .accessibility_label(optionAccessible)
+        .tooltip(isAll ? optionLabel : option)
+        .on_mouse_down("left", (_event, cx) => cx.stop_propagation())
+        .on_click((_event, cx) => {
+          cx.stop_propagation();
+          view.selectModelFilter(option, cx);
+        })
+        .child(div().min_w(0).flex_1().truncate().child(optionLabel))
+        .when(isSelected, el => el.child(div().flex_none().text_size(10).text_color(t.accent).child("✓")));
+    }))
+    .when(options.length <= 1, el => el.child(div().w_full().min_w(0).px(8).py(4).text_size(10).text_color(t.muted).child(msg("ui.filter.noGroups"))));
+  return Popup.new("magpie-model-filter-popup", trigger).anchor("bottom_left").flex_1().min_w(0).flex()
+    .when(open, el => el.content(menu));
+}
 function header(env, live) {
   const { view, t, msg } = env;
   const usagePage = view.page === "usage";
@@ -227,11 +308,7 @@ function header(env, live) {
         tooltip: msg(usagePage ? "ui.accounting.allTooltip" : "ui.scope.allTooltip"),
       }).flex_1()))
     .child(h_flex().w_full().min_w(0).items_center().gap(6)
-      .when(!usagePage, el => el.child(button(env, "adaptive", filterGroup || msg("ui.filter.allModels"), cx => view.cycleModelFilter(cx), {
-        selected: Boolean(filterGroup), padding: 6,
-        accessible: filterGroup ? msg("ui.filter.groupAccessible", { group: filterGroup }) : msg("ui.filter.allAccessible"),
-        tooltip: filterGroup ? msg("ui.filter.groupAccessible", { group: filterGroup }) : msg("ui.filter.allAccessible"),
-      }).flex_1()))
+      .when(!usagePage, el => el.child(modelFilterDropdown(env, filterGroup)))
       .when(usagePage, el => el.child(button(env, "privacy", msg(env.masked ? "ui.privacy.masked" : "ui.privacy.visible"), cx => view.toggleMasked(cx), {
         kind: "quiet", selected: env.masked, padding: 6, accessible: msg(env.masked ? "ui.privacy.maskedAccessible" : "ui.privacy.visibleAccessible"),
       }).flex_1()))
