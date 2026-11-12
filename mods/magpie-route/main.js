@@ -1,6 +1,6 @@
 import { View } from "gpui-kit";
 import { appHome, exec, focused, home, layout, nextCommand, panes, readTextFile, spaces, terminals } from "herdr";
-import { emptyTrace, filterRoutes, readAccounting, readQuotas, readTrace, readUsage } from "./routing-data.js";
+import { availableGroups, emptyTrace, filterRoutes, readAccounting, readGroups, readQuotas, readTrace, readUsage } from "./routing-data.js";
 import { renderRouting } from "./route-view.js";
 import { createI18n, messageError } from "./i18n.js";
 import { PANEL_DEFAULTS, movePanel, normalizePanelOrders } from "./panel-order.js";
@@ -61,6 +61,9 @@ export default class MagpieRoute extends View {
     this.quotasUpdated = null;
     this.quotaError = null;
     this.lastQuota = 0;
+    this.groups = [];
+    this.groupJob = null;
+    this.lastGroups = 0;
     this.usage = null;
     this.usageJob = null;
     this.usageBusy = false;
@@ -77,7 +80,9 @@ export default class MagpieRoute extends View {
     this.accountingGeneration = 0;
     this.lastAccounting = 0;
     this.scope = "session";
-    this.adaptiveOnly = localStorage.getItem("adaptive-only") !== "false";
+    const savedFilter = localStorage.getItem("model-filter");
+    this.modelFilter = nonempty(savedFilter) ? savedFilter.trim() : "all";
+    this.modelFilterCycle = null;
     this.masked = localStorage.getItem("masked") !== "false";
     this.motion = localStorage.getItem("motion") !== "false";
     this.selectedId = null;
@@ -108,6 +113,7 @@ export default class MagpieRoute extends View {
       if (this.target?.terminal && Date.now() - this.lastBinding >= REBIND_MS) this.resolve(cx);
       this.pollTrace(cx);
       if (Date.now() - this.lastQuota >= QUOTA_MS) this.pollQuotas(cx);
+      if (Date.now() - this.lastGroups >= QUOTA_MS) this.pollGroups(cx);
       if (Date.now() - this.lastUsage >= USAGE_MS) this.pollUsage(cx);
       if (Date.now() - this.lastAccounting >= ACCOUNTING_MS) this.pollAccounting(cx);
     });
@@ -123,6 +129,7 @@ export default class MagpieRoute extends View {
         else if (command === "order-reset") this.resetPanelOrder(cx);
         else if (command === "scope-session") this.setScope("session", cx);
         else if (command === "scope-all") this.setScope("all", cx);
+        else if (command === "model-filter") this.cycleModelFilter(cx);
       }
     });
   }
@@ -211,6 +218,7 @@ export default class MagpieRoute extends View {
       this.streamEnabled = true;
       this.pollTrace(cx);
       this.pollQuotas(cx);
+      this.pollGroups(cx);
       this.pollUsage(cx);
       this.pollAccounting(cx);
     }
@@ -235,6 +243,7 @@ export default class MagpieRoute extends View {
       cx.notify();
       this.pollTrace(cx);
       this.pollQuotas(cx);
+      this.pollGroups(cx);
       this.pollUsage(cx);
       this.pollAccounting(cx);
     });
@@ -345,6 +354,27 @@ export default class MagpieRoute extends View {
     });
   }
 
+  pollGroups(cx) {
+    if (!this.visible || this.closed || this.groupJob || this.port === null || this.configError) return;
+    const job = { generation: this.streamGeneration, port: this.port };
+    this.groupJob = job;
+    this.lastGroups = Date.now();
+    cx.spawn(async cx => {
+      try {
+        const groups = await readGroups(job.port);
+        if (job.generation !== this.streamGeneration || !this.visible || this.closed) return;
+        const changed = groups.length !== this.groups.length || groups.some((id, index) => id !== this.groups[index]);
+        this.groups = groups;
+        if (changed) cx.notify();
+      } catch {
+        // Keep observed trace groups if /v1/models is temporarily unavailable.
+      } finally {
+        if (this.groupJob === job) this.groupJob = null;
+        if (this.visible && !this.closed && job.generation !== this.streamGeneration) this.pollGroups(cx);
+      }
+    });
+  }
+
   pollQuotas(cx, refresh = false) {
     if (!this.visible || this.closed || this.quotaJob || this.port === null || this.configError) return;
     const job = { generation: this.streamGeneration, port: this.port };
@@ -383,6 +413,8 @@ export default class MagpieRoute extends View {
     this.quotas = [];
     this.quotasUpdated = null;
     this.quotaError = null;
+    this.groups = [];
+    this.lastGroups = 0;
     this.usage = null;
     this.usageError = null;
     this.lastUsage = 0;
@@ -584,8 +616,12 @@ export default class MagpieRoute extends View {
     return true;
   }
 
+  modelGroups() {
+    return availableGroups(this.trace, this.groups);
+  }
+
   routes() {
-    return filterRoutes(this.trace, { scope: this.scope, session: this.session, adaptiveOnly: this.adaptiveOnly });
+    return filterRoutes(this.trace, { scope: this.scope, session: this.session, modelFilter: this.modelFilter });
   }
 
   selectRoute(id, cx) {
@@ -635,9 +671,14 @@ export default class MagpieRoute extends View {
     cx.notify();
   }
 
-  toggleAdaptive(cx) {
-    this.adaptiveOnly = !this.adaptiveOnly;
-    localStorage.setItem("adaptive-only", String(this.adaptiveOnly));
+  cycleModelFilter(cx) {
+    // Keep this pass fixed while live traces and configured groups are refreshed.
+    if (this.modelFilterCycle === null) this.modelFilterCycle = ["all", ...this.modelGroups()];
+    const options = this.modelFilterCycle;
+    const index = options.indexOf(this.modelFilter);
+    this.modelFilter = index >= 0 ? options[(index + 1) % options.length] : "all";
+    if (this.modelFilter === "all") this.modelFilterCycle = null;
+    localStorage.setItem("model-filter", this.modelFilter);
     this.selectedId = null;
     this.resetRecent();
     cx.notify();

@@ -16,6 +16,7 @@ const shortSession = value => {
   return text.length > 16 ? `${text.slice(0, 8)}…${text.slice(-4)}` : text;
 };
 
+const shortGroup = value => scalar(value).replace(/^(?:group|auto)\//, "");
 function duration(env, value) {
   if (!finite(value) || value < 0) return env.msg("ui.notReported");
   if (value < 1000) return env.msg("ui.duration.ms", { value: env.number(Math.round(value)) });
@@ -189,6 +190,7 @@ function header(env, live) {
   const usagePage = view.page === "usage";
   const connection = connectionState(env);
   const connectionColor = view.connection === "live" && connection.token === "done" ? t.live : t[connection.token];
+  const filterGroup = scalar(view.modelFilter) && view.modelFilter !== "all" ? shortGroup(view.modelFilter) : "";
   return v_flex().w_full().min_w(0).flex_none().px(14).py(14).gap(10).border_b(1).border_color(t.border)
     .child(h_flex().w_full().min_w(0).items_center().gap(8)
       .child(v_flex().min_w(0).flex_1().gap(4)
@@ -225,8 +227,10 @@ function header(env, live) {
         tooltip: msg(usagePage ? "ui.accounting.allTooltip" : "ui.scope.allTooltip"),
       }).flex_1()))
     .child(h_flex().w_full().min_w(0).items_center().gap(6)
-      .when(!usagePage, el => el.child(button(env, "adaptive", view.adaptiveOnly ? "codex-adaptive" : msg("ui.filter.allModels"), cx => view.toggleAdaptive(cx), {
-        selected: view.adaptiveOnly, padding: 6, accessible: msg(view.adaptiveOnly ? "ui.filter.adaptiveAccessible" : "ui.filter.allAccessible"),
+      .when(!usagePage, el => el.child(button(env, "adaptive", filterGroup || msg("ui.filter.allModels"), cx => view.cycleModelFilter(cx), {
+        selected: Boolean(filterGroup), padding: 6,
+        accessible: filterGroup ? msg("ui.filter.groupAccessible", { group: filterGroup }) : msg("ui.filter.allAccessible"),
+        tooltip: filterGroup ? msg("ui.filter.groupAccessible", { group: filterGroup }) : msg("ui.filter.allAccessible"),
       }).flex_1()))
       .when(usagePage, el => el.child(button(env, "privacy", msg(env.masked ? "ui.privacy.masked" : "ui.privacy.visible"), cx => view.toggleMasked(cx), {
         kind: "quiet", selected: env.masked, padding: 6, accessible: msg(env.masked ? "ui.privacy.maskedAccessible" : "ui.privacy.visibleAccessible"),
@@ -762,8 +766,9 @@ function recentRequests(env, recent) {
     .child(section(env, env.msg("ui.recent.title"), null, trailing))
     .children(visible.map(route => requestRow(env, route)));
   if (recent.length === 0) {
-    const empty = env.msg(list(view.routes()).length > 0 ? "ui.recent.noCompleted"
-      : view.adaptiveOnly ? "ui.recent.noAdaptive" : "ui.recent.empty");
+    const filterGroup = scalar(view.modelFilter) && view.modelFilter !== "all" ? shortGroup(view.modelFilter) : "";
+    const empty = list(view.routes()).length > 0 ? env.msg("ui.recent.noCompleted")
+      : filterGroup ? env.msg("ui.recent.noGroup", { group: filterGroup }) : env.msg("ui.recent.empty");
     panel.child(line(env, empty, env.t.muted).text_size(11).py(5));
   }
   if (expanded) {

@@ -8,13 +8,13 @@ const number = value => typeof value === "number" && Number.isFinite(value) ? va
 const counter = value => Number.isSafeInteger(value) && value >= 0;
 const list = value => Array.isArray(value) ? value : [];
 const strings = value => list(value).filter(item => typeof item === "string");
-function endpoint(port, path) {
+function endpoint(port, path, base = "/v1/magpie/") {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw messageError("system.invalidPort");
-  return `http://127.0.0.1:${port}/v1/magpie/${path}`;
+  return `http://127.0.0.1:${port}${base}${path}`;
 }
 
-async function request(port, path, method = "GET") {
-  const response = await fetch(endpoint(port, path), { method });
+async function request(port, path, method = "GET", base = "/v1/magpie/") {
+  const response = await fetch(endpoint(port, path, base), { method });
   // Do not surface arbitrary response bodies, which may contain request metadata.
   if (!response.ok) throw messageError("system.httpError", { status: response.status });
   return response;
@@ -337,6 +337,35 @@ function normalizeQuota(value) {
   };
 }
 
+function groupID(value) {
+  const text = string(value).trim();
+  if (!text) return "";
+  if (text.startsWith("group/") || text.startsWith("auto/")) return text;
+  return `group/${text}`;
+}
+
+function routeGroup(route) {
+  const asked = string(route.asked).trim();
+  if (asked.startsWith("group/") || asked.startsWith("auto/")) return asked;
+  return groupID(route.group);
+}
+
+export async function readGroups(port) {
+  const response = await request(port, "models", "GET", "/v1/");
+  const data = await response.json();
+  if (!object(data) || !Array.isArray(data.data)) throw messageError("system.invalidTrace");
+  const groups = [];
+  const seen = new Set();
+  for (const item of data.data) {
+    if (!object(item) || typeof item.id !== "string") continue;
+    const id = item.id.trim();
+    if (!id || seen.has(id) || !(id.startsWith("group/") || id.startsWith("auto/"))) continue;
+    seen.add(id);
+    groups.push(id);
+  }
+  return groups;
+}
+
 export async function readQuotas(port, refresh = false) {
   if (refresh) await request(port, "quotas/refresh", "POST");
   const response = await request(port, "quotas?kept=1");
@@ -344,15 +373,39 @@ export async function readQuotas(port, refresh = false) {
   if (!object(data) || data.object !== "list" || !Array.isArray(data.data) || !data.data.every(object)) {
     throw messageError("system.invalidQuota");
   }
-  return { cards: data.data.map(normalizeQuota), updatedAt: new Date().toISOString() };
+  const cards = data.data.map(normalizeQuota);
+  return { cards, updatedAt: new Date().toISOString() };
 }
 
-export function filterRoutes(trace, { scope, session, adaptiveOnly } = {}) {
+export function availableGroups(trace, configured = []) {
+  const seen = new Set();
+  const ordered = [];
+  const add = value => {
+    const id = groupID(value);
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      ordered.push(id);
+    }
+  };
+  for (const id of list(configured)) add(id);
+  const observed = [];
+  for (const route of trace?.routes?.values?.() ?? []) {
+    const id = routeGroup(route);
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      observed.push(id);
+    }
+  }
+  return ordered.concat(observed.sort());
+}
+
+export function filterRoutes(trace, { scope, session, modelFilter = "all" } = {}) {
   if (scope === "session" && (typeof session !== "string" || session.length === 0)) return [];
+  const filter = typeof modelFilter === "string" && modelFilter.trim() ? modelFilter.trim() : "all";
   return Array.from(trace.routes.values()).filter(route => {
     if (scope === "session" && route.session !== session) return false;
     if (scope !== "session" && scope !== "all") return false;
-    return !adaptiveOnly || route.asked === "group/codex-adaptive"
-      || route.group === "group/codex-adaptive" || route.group === "codex-adaptive";
+    if (filter === "all") return true;
+    return routeGroup(route) === filter;
   }).sort((a, b) => b.id - a.id);
 }
