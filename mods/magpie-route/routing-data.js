@@ -8,6 +8,7 @@ const number = value => typeof value === "number" && Number.isFinite(value) ? va
 const counter = value => Number.isSafeInteger(value) && value >= 0;
 const list = value => Array.isArray(value) ? value : [];
 const strings = value => list(value).filter(item => typeof item === "string");
+const CLASSIFIER_LIMIT = 256;
 function endpoint(port, path, base = "/v1/magpie/") {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw messageError("system.invalidPort");
   return `http://127.0.0.1:${port}${base}${path}`;
@@ -21,7 +22,7 @@ async function request(port, path, method = "GET", base = "/v1/magpie/") {
 }
 
 export function emptyTrace() {
-  return { pid: null, seq: 0, routes: new Map(), totals: { requests: 0, rerouted: 0, errors: 0 } };
+  return { pid: null, port: null, seq: 0, routes: new Map(), classifiers: new Map(), totals: { requests: 0, rerouted: 0, errors: 0 } };
 }
 
 // routing.go:770–812. Never retain vendor links, raw errors, or key fields.
@@ -100,8 +101,38 @@ function normalizeClassifier(value) {
     sure: sure !== null && sure >= 0 && sure <= 1 ? sure : null,
     ms: ms !== null && ms >= 0 ? ms : null, cached: value.cached === true,
     above: string(value.above), fallback: string(value.fallback), afterEffort: string(value.afterEffort),
-    failed: Boolean(string(value.error)),
+    failed: value.failed === true || Boolean(string(value.error)),
   };
+}
+
+function classifierRecord(route) {
+  const classifier = normalizeClassifier(route.classifier);
+  const session = string(route.session);
+  const group = routeGroup(route);
+  if (!session || !group || !classifier || classifier.failed || route.rule?.waits || route.rule?.held
+    || !counter(route.id) || !Number.isFinite(Date.parse(route.time))) return null;
+  return { id: route.id, time: string(route.time), session, group, asked: group, classifier };
+}
+
+// Classification records outlive trace IDs; they contain no candidates, prompts or errors.
+export function mergeClassifiers(trace, records) {
+  const classifiers = new Map(trace.classifiers);
+  for (const value of records) {
+    const record = classifierRecord(value);
+    if (!record) continue;
+    classifiers.set(JSON.stringify([record.session, record.group, record.time, record.id]), record);
+  }
+  const ordered = Array.from(classifiers.entries()).sort((a, b) =>
+    Date.parse(b[1].time) - Date.parse(a[1].time) || b[1].id - a[1].id);
+  return { ...trace, classifiers: new Map(ordered.slice(0, CLASSIFIER_LIMIT)) };
+}
+
+export function filterClassifiers(trace, options, current = null) {
+  return filterRoutes({ routes: trace.classifiers }, options)
+    .filter(record => !current || current.session && routeGroup(current)
+      && record.session === current.session && record.group === routeGroup(current)
+      && Date.parse(record.time) <= Date.parse(current.time))
+    .sort((a, b) => Date.parse(b.time) - Date.parse(a.time) || b.id - a.id);
 }
 
 function normalizeRoute(value) {
@@ -149,19 +180,22 @@ async function traceSnapshot(port, after) {
 }
 
 export async function readTrace(port, previous = emptyTrace()) {
-  let data = await traceSnapshot(port, previous.seq);
-  let reset = previous.pid !== null && data.pid !== previous.pid || data.seq < previous.seq;
-  if (reset) data = await traceSnapshot(port, 0);
+  const samePort = previous.port === null || previous.port === undefined || previous.port === port;
+  let data = await traceSnapshot(port, samePort ? previous.seq : 0);
+  const reset = !samePort || previous.pid !== null && data.pid !== previous.pid || data.seq < previous.seq;
+  if (reset && samePort) data = await traceSnapshot(port, 0);
   const routes = reset ? new Map() : new Map(previous.routes);
-  for (const route of data.routes) routes.set(route.id, normalizeRoute(route));
+  const observed = data.routes.map(normalizeRoute);
+  for (const route of observed) routes.set(route.id, route);
   const retained = new Set(data.ids);
   // No client-side 60-row cap: the server retains extra concurrent requests.
   // IDs are authoritative, including the server dropping an unfinished route.
   for (const id of routes.keys()) if (!retained.has(id)) routes.delete(id);
-  return {
-    pid: data.pid, seq: data.seq, routes,
+  return mergeClassifiers({
+    pid: data.pid, port, seq: data.seq, routes,
+    classifiers: samePort ? previous.classifiers : new Map(),
     totals: { requests: data.totals.requests, rerouted: data.totals.rerouted, errors: data.totals.errors },
-  };
+  }, observed);
 }
 
 // Usage's Input excludes reads/writes but includes input whose cache status is

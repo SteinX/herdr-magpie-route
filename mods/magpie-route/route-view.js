@@ -668,19 +668,13 @@ function classifierView(env, classifier) {
 }
 
 function classifierSection(env, routes, selected) {
-  let route = selected;
-  if (!route) {
-    let latestTime = NaN;
-    for (const candidate of routes) {
-      if (!candidate.classifier) continue;
-      const time = Date.parse(candidate.time);
-      if (!route || (finite(time) && (!finite(latestTime) || time > latestTime))) {
-        route = candidate;
-        latestTime = time;
-      }
-    }
-  }
-  const classifier = route?.classifier;
+  const route = selected ?? routes[0] ?? null;
+  const reported = route?.rule?.held || route?.rule?.waits ? null : route?.classifier;
+  const history = reported ? null : env.view.classifiers(selected)[0] ?? null;
+  const classifier = reported ?? history?.classifier;
+  const historical = Boolean(history);
+  const state = route?.rule?.waits ? "waiting" : route?.rule?.held ? "held"
+    : reported ? reported.failed ? "failed" : "reported" : route ? "unreported" : historical ? "historical" : "emptyContext";
   const expanded = env.view.classifierExpanded === true;
   const summary = classifier ? env.msg("ui.classifier.summary", {
     model: classificationText(env, classifier.by, 64),
@@ -689,7 +683,13 @@ function classifierSection(env, routes, selected) {
   }) : env.msg("ui.notReported");
   const context = route ? env.msg(selected ? "ui.classifier.selectedContext" : "ui.classifier.latestContext", {
     id: classificationText(env, route.id, 48), time: safeText(env, env.date(route.time)),
-  }) : env.msg("ui.classifier.emptyContext");
+  }) : null;
+  const historyContext = history ? env.msg("ui.classifier.historyContext", {
+    id: classificationText(env, history.id, 48), time: safeText(env, env.date(history.time)),
+  }) : null;
+  const source = history ?? route;
+  const recovery = env.view.classifierHistory;
+  const recoveryState = recovery?.key === env.view.classifierHistoryKey() ? recovery.state : null;
   const icon = modelIconPath(classifier?.by);
   return v_flex().w_full().min_w(0).flex_none().p(12).gap(7).rounded(10)
     .border(1).border_color(env.t.border).bg(env.t.chrome)
@@ -704,7 +704,17 @@ function classifierSection(env, routes, selected) {
           kind: "quiet", selected: expanded,
           accessible: env.msg(expanded ? "ui.classifier.collapseAccessible" : "ui.classifier.expandAccessible"),
         }).flex_none()))
-    .child(clipped(env, context, env.t.muted).text_size(10).w_full())
+    .child(line(env, env.msg(`ui.classifier.${state}`), state === "waiting" ? env.t.working : env.t.muted).text_size(11))
+    .when(Boolean(context), el => el.child(line(env, context, env.t.muted).text_size(10)))
+    .when(Boolean(historyContext), el => el.child(line(env, historyContext, env.t.muted).text_size(10)))
+    .when(Boolean(source), el => el.child(line(env, env.msg("ui.classifier.source", {
+      session: shortSession(source.session) || env.msg("ui.notReported"),
+      group: classificationText(env, source.group || source.asked, 96),
+    }), env.t.muted).text_size(10)))
+    .when(historical, el => el.child(line(env, env.msg("ui.classifier.historyNote"), env.t.muted).text_size(10)))
+    .when(recoveryState === "loading" || recoveryState === "partial" || recoveryState === "unavailable", el => el.child(
+      line(env, env.msg(recoveryState === "loading" ? "ui.classifier.historyLoading"
+        : recoveryState === "partial" ? "ui.classifier.historyPartial" : "ui.classifier.historyUnavailable"), env.t.muted).text_size(10)))
     .when(expanded, el => el.child(v_flex().w_full().min_w(0).pt(9).border_t(1).border_color(env.t.border)
       .child(classifierView(env, classifier))));
 }

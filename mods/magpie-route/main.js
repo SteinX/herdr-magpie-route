@@ -1,6 +1,6 @@
 import { View } from "gpui-kit";
 import { appHome, exec, focused, home, layout, nextCommand, panes, readTextFile, spaces, terminals } from "herdr";
-import { availableGroups, emptyTrace, filterRoutes, readAccounting, readGroups, readQuotas, readTrace, readUsage } from "./routing-data.js";
+import { availableGroups, emptyTrace, filterClassifiers, filterRoutes, mergeClassifiers, readAccounting, readGroups, readQuotas, readTrace, readUsage } from "./routing-data.js";
 import { renderRouting } from "./route-view.js";
 import { createI18n, messageError } from "./i18n.js";
 import { PANEL_DEFAULTS, movePanel, normalizePanelOrders } from "./panel-order.js";
@@ -48,6 +48,8 @@ export default class MagpieRoute extends View {
     this.bindingPaused = false;
     this.trace = emptyTrace();
     this.traceJob = null;
+    this.classifierHistory = null;
+    this.classifierHistoryJob = null;
     this.streamGeneration = 0;
     this.streamEnabled = true;
     this.connection = "unbound";
@@ -113,6 +115,7 @@ export default class MagpieRoute extends View {
       if (!this.visible || this.closed) return;
       if (this.target?.terminal && Date.now() - this.lastBinding >= REBIND_MS) this.resolve(cx);
       this.pollTrace(cx);
+      this.pollClassifierHistory(cx);
       if (Date.now() - this.lastQuota >= QUOTA_MS) this.pollQuotas(cx);
       if (Date.now() - this.lastGroups >= QUOTA_MS) this.pollGroups(cx);
       if (Date.now() - this.lastUsage >= USAGE_MS) this.pollUsage(cx);
@@ -194,6 +197,7 @@ export default class MagpieRoute extends View {
     this.modelFilterOpen = false;
     if (!this.visible) return;
     this.visible = false;
+    this.classifierHistory = null;
     this.target = null;
     this.resetBinding();
     // A hidden copy remains alive in Herdr: invalidate replies, keep the cursor.
@@ -236,6 +240,10 @@ export default class MagpieRoute extends View {
         const port = (source === null ? {} : JSON.parse(source))?.port ?? DEFAULT_PORT;
         if (!Number.isInteger(port) || port < 1 || port > 65535) throw messageError("system.invalidPort");
         if (generation !== this.configGeneration || this.closed) return;
+        if (this.trace.port !== null && this.trace.port !== port) {
+          this.trace = emptyTrace();
+          this.classifierHistory = null;
+        }
         this.port = port;
       } catch (error) {
         if (generation !== this.configGeneration || this.closed) return;
@@ -309,12 +317,14 @@ export default class MagpieRoute extends View {
         if (job.generation !== this.streamGeneration || !this.visible || this.closed) return;
         const changed = this.connection !== "live" || next.pid !== this.trace.pid || next.seq !== this.trace.seq;
         if (next.pid !== this.trace.pid) this.selectedId = null;
-        this.trace = next;
+        // A history read may have completed while the trace request was in flight.
+        this.trace = mergeClassifiers(next, this.trace.port === job.port ? this.trace.classifiers.values() : []);
         this.syncRouteFocus(cx);
         if (this.selectedId !== null && !next.routes.has(this.selectedId)) this.selectedId = null;
         this.connection = "live";
         this.error = null;
         if (changed) cx.notify();
+        this.pollClassifierHistory(cx);
       } catch (error) {
         if (job.generation !== this.streamGeneration || !this.visible || this.closed) return;
         this.connection = "offline";
@@ -324,6 +334,51 @@ export default class MagpieRoute extends View {
       } finally {
         if (this.traceJob === job) this.traceJob = null;
         if (this.visible && !this.closed && job.generation !== this.streamGeneration) this.pollTrace(cx);
+      }
+    });
+  }
+
+  classifierHistoryKey() {
+    if (this.port === null || this.trace.port !== this.port || this.configError
+      || this.scope === "session" && !nonempty(this.session)) return null;
+    return JSON.stringify([this.port, this.scope, this.scope === "session" ? this.session : null, this.modelFilter]);
+  }
+
+  pollClassifierHistory(cx) {
+    const key = this.classifierHistoryKey();
+    if (!this.visible || this.closed || this.page !== "routing" || !key || this.classifierHistoryJob
+      || this.classifierHistory?.key === key) return;
+    const routes = this.routes();
+    const route = routes.find(route => route.id === this.selectedId) ?? routes[0];
+    if (route?.classifier && !route.rule?.held && !route.rule?.waits) return;
+    const job = { key, generation: this.streamGeneration, port: this.port,
+      scope: this.scope, session: this.scope === "session" ? this.session : "", group: this.modelFilter };
+    this.classifierHistoryJob = job;
+    this.classifierHistory = { key, state: "loading" };
+    cx.spawn(async cx => {
+      const current = () => this.visible && !this.closed && job.generation === this.streamGeneration
+        && this.classifierHistoryKey() === key;
+      try {
+        const helper = appHome().replace(/[\\/]+$/, "") + "/mods/magpie-route/classifier-history.py";
+        const result = await exec("python3", [helper, job.scope, job.session, job.group], { timeout: 6000 });
+        if (!current()) return;
+        if (result.code !== 0) throw new Error();
+        const report = JSON.parse(result.stdout);
+        if (report?.scope !== job.scope || report?.session !== job.session || report?.group !== job.group
+          || !Array.isArray(report.records)) throw new Error();
+        this.trace = mergeClassifiers(this.trace, report.records);
+        this.classifierHistory = { key, state: report.unavailable ? "unavailable" : report.partial ? "partial" : "ready" };
+      } catch {
+        if (current()) this.classifierHistory = { key, state: "unavailable" };
+      } finally {
+        if (this.classifierHistoryJob === job) this.classifierHistoryJob = null;
+        if (!current() && this.classifierHistory?.key === key && this.classifierHistory.state === "loading") {
+          this.classifierHistory = null;
+        }
+        if (this.visible && !this.closed) {
+          if (!current()) this.pollClassifierHistory(cx);
+          cx.notify();
+        }
       }
     });
   }
@@ -412,7 +467,8 @@ export default class MagpieRoute extends View {
     this.modelFilterOpen = false;
     this.streamGeneration++;
     this.port = null;
-    this.trace = emptyTrace();
+    this.trace = { ...emptyTrace(), port: this.trace.port, classifiers: this.trace.classifiers };
+    this.classifierHistory = null;
     this.quotas = [];
     this.quotasUpdated = null;
     this.quotaError = null;
@@ -635,6 +691,10 @@ export default class MagpieRoute extends View {
 
   routes() {
     return filterRoutes(this.trace, { scope: this.scope, session: this.session, modelFilter: this.modelFilter });
+  }
+
+  classifiers(current = null) {
+    return filterClassifiers(this.trace, { scope: this.scope, session: this.session, modelFilter: this.modelFilter }, current);
   }
 
   selectRoute(id, cx) {
