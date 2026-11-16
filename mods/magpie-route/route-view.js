@@ -274,6 +274,7 @@ function header(env, live) {
   const connection = connectionState(env);
   const connectionColor = view.connection === "live" && connection.token === "done" ? t.live : t[connection.token];
   const filterGroup = scalar(view.modelFilter) && view.modelFilter !== "all" ? shortGroup(view.modelFilter) : "";
+  const sourceLabel = msg("ui.header.dataSource", { machine: view.machineLabel() });
   return v_flex().w_full().min_w(0).flex_none().px(14).py(14).gap(10).border_b(1).border_color(t.border)
     .child(h_flex().w_full().min_w(0).items_center().gap(8)
       .child(v_flex().min_w(0).flex_1().gap(4)
@@ -296,6 +297,7 @@ function header(env, live) {
       .child(button(env, "page-usage", msg("ui.accounting.title"), cx => view.setPage("usage", cx), {
         kind: "segment", selected: usagePage, accessible: msg("ui.page.usageAccessible"),
       }).flex_1()))
+    .child(clipped(env, sourceLabel, t.muted).text_size(11).tooltip(sourceLabel))
     .child(h_flex().w_full().min_w(0).items_center().gap(7)
       .child(div().flex_none().text_size(10).text_color(t.muted).child(msg("ui.header.sourceSession")))
       .child(clipped(env, view.session ? shortSession(view.session) : msg("ui.header.unboundSession"), t.muted)

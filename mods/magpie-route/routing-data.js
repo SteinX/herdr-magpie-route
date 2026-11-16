@@ -9,17 +9,6 @@ const counter = value => Number.isSafeInteger(value) && value >= 0;
 const list = value => Array.isArray(value) ? value : [];
 const strings = value => list(value).filter(item => typeof item === "string");
 const CLASSIFIER_LIMIT = 256;
-function endpoint(port, path, base = "/v1/magpie/") {
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw messageError("system.invalidPort");
-  return `http://127.0.0.1:${port}${base}${path}`;
-}
-
-async function request(port, path, method = "GET", base = "/v1/magpie/") {
-  const response = await fetch(endpoint(port, path, base), { method });
-  // Do not surface arbitrary response bodies, which may contain request metadata.
-  if (!response.ok) throw messageError("system.httpError", { status: response.status });
-  return response;
-}
 
 export function emptyTrace() {
   return { pid: null, port: null, seq: 0, routes: new Map(), classifiers: new Map(), totals: { requests: 0, rerouted: 0, errors: 0 } };
@@ -165,9 +154,9 @@ function normalizeRoute(value) {
   };
 }
 
-async function traceSnapshot(port, after) {
+async function traceSnapshot(source, after) {
   // The presence of wait (even wait=0) enables the server's 25-second wait.
-  const response = await request(port, `trace?after=${after}`);
+  const response = await source.request(`trace?after=${after}`);
   const data = await response.json();
   if (!object(data) || data.object !== "trace" || !counter(data.seq) || !counter(data.pid)
     || !Array.isArray(data.routes) || !Array.isArray(data.ids) || !data.ids.every(counter)
@@ -179,11 +168,12 @@ async function traceSnapshot(port, after) {
   return data;
 }
 
-export async function readTrace(port, previous = emptyTrace()) {
+export async function readTrace(source, previous = emptyTrace()) {
+  const port = source.port;
   const samePort = previous.port === null || previous.port === undefined || previous.port === port;
-  let data = await traceSnapshot(port, samePort ? previous.seq : 0);
+  let data = await traceSnapshot(source, samePort ? previous.seq : 0);
   const reset = !samePort || previous.pid !== null && data.pid !== previous.pid || data.seq < previous.seq;
-  if (reset && samePort) data = await traceSnapshot(port, 0);
+  if (reset && samePort) data = await traceSnapshot(source, 0);
   const routes = reset ? new Map() : new Map(previous.routes);
   const observed = data.routes.map(normalizeRoute);
   for (const route of observed) routes.set(route.id, route);
@@ -214,8 +204,8 @@ function cacheMetric(value) {
   };
 }
 
-export async function readUsage(port) {
-  const response = await request(port, "usage?period=all");
+export async function readUsage(source) {
+  const response = await source.request("usage?period=all");
   const data = await response.json();
   const overall = cacheMetric(data);
   if (!overall || data.period !== "all" || !Array.isArray(data.models) || !counter(data.calls)) {
@@ -276,7 +266,7 @@ function accountingModels(models) {
     || (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : a.model < b.model ? -1 : a.model > b.model ? 1 : 0));
 }
 
-export async function readAccounting(port, { scope, session = null } = {}) {
+export async function readAccounting(source, { scope, session = null } = {}) {
   if (!["all", "session"].includes(scope)) throw messageError("system.invalidAccounting");
   if (scope === "session" && (typeof session !== "string" || !session.trim())) {
     throw messageError("system.accountingUnbound");
@@ -291,7 +281,7 @@ export async function readAccounting(port, { scope, session = null } = {}) {
   let offset = 0;
   let earliest = Infinity;
   do {
-    const response = await request(port, `${base}&offset=${offset}`);
+    const response = await source.request(`${base}&offset=${offset}`);
     const data = await response.json();
     if (!object(data) || data.period !== "all" || !counter(data.total) || data.offset !== offset
       || !Array.isArray(data.rows) || data.rows.length > data.total - offset) {
@@ -384,8 +374,8 @@ function routeGroup(route) {
   return groupID(route.group);
 }
 
-export async function readGroups(port) {
-  const response = await request(port, "models", "GET", "/v1/");
+export async function readGroups(source) {
+  const response = await source.request("models", "GET", "/v1/");
   const data = await response.json();
   if (!object(data) || !Array.isArray(data.data)) throw messageError("system.invalidTrace");
   const groups = [];
@@ -400,9 +390,9 @@ export async function readGroups(port) {
   return groups;
 }
 
-export async function readQuotas(port, refresh = false) {
-  if (refresh) await request(port, "quotas/refresh", "POST");
-  const response = await request(port, "quotas?kept=1");
+export async function readQuotas(source, refresh = false) {
+  if (refresh) await source.request("quotas/refresh", "POST");
+  const response = await source.request("quotas?kept=1");
   const data = await response.json();
   if (!object(data) || data.object !== "list" || !Array.isArray(data.data) || !data.data.every(object)) {
     throw messageError("system.invalidQuota");

@@ -10,7 +10,7 @@ Native interface with illustrative demo data (synthetic session, metrics and mas
 
 ## Features
 
-- Follow the current local OMP session or inspect all retained gateway requests.
+- Follow the current OMP session on the active Herdr machine or inspect all retained requests from that machine's gateway.
 - See actual model destinations, effort, candidate branches and live native flow animation.
 - Switch to a dedicated Usage & cost page for per-model input/output/cache tokens and USD estimates, scoped to the current session or all recorded gateway calls.
 - Read overall and per-model input-cache hit rates, shown to two decimal places from all recorded Magpie Usage data.
@@ -24,8 +24,8 @@ Native interface with illustrative demo data (synthetic session, metrics and mas
 ## Requirements
 
 - Herdr App, verified with **0.1.15**, with native path painting and frame animation support. This is a Herdr mod, not an npm package or browser extension.
-- A running local Magpie gateway exposing the trace, usage and quota APIs listed below. The earliest compatible Magpie release has not been established.
-- For current-session binding: a local OMP process, Python 3, `hc` and `lsof`. The resolver uses Python's standard library.
+- A running Magpie gateway on each machine you want to inspect, exposing the trace, usage and quota APIs listed below. The earliest compatible Magpie release has not been established.
+- For remote machines: a connected Herdr machine and Python 3 on that machine. For current-session binding: OMP, `hc` and `lsof` on the selected machine. The Python helpers use only the standard library.
 
 macOS is the verified platform. Linux has not been validated; Windows session binding is not supported by the current Unix process/file discovery code. Global request browsing does not require successful OMP session binding.
 
@@ -73,7 +73,9 @@ These examples use the `herdr-app` CLI. If it is not on PATH, use the executable
 
 ## Use
 
-Choose a local OMP tab for **Current session**, or select **All requests** to browse the gateway's retained cache. Open the model filter dropdown to choose **All models** or any active routing group (such as `codex-gemini-adaptive` or `codex-adaptive`) directly. Scroll inside the menu when the list exceeds its height.
+The sidebar follows the active Herdr space's machine. **Data source** identifies this computer or the selected remote machine on both pages. Choose an OMP tab for **Current session**, or select **All requests** to browse that machine's gateway cache. “All” and “Global” always mean the selected machine, not all connected machines. Switching machines clears previous readings and discards delayed replies from the old machine. Open the model filter dropdown to choose **All models** or any active routing group (such as `codex-gemini-adaptive` or `codex-adaptive`) directly. Scroll inside the menu when the list exceeds its height.
+
+For remote spaces, the mod uses Herdr's machine execution interface to read the remote port and access that machine's loopback gateway with Python. No exposed gateway port, manual SSH tunnel, or remote mod installation is required. Session resolution and classifier-history reduction run on the same remote machine; helper source is supplied by the desktop mod. Missing tools or an unreachable remote produce an unavailable/error state; the mod does not fall back to this computer. Install `python3`, and install `hc` and `lsof` alongside OMP if current-session binding is needed. Remote Windows session binding is unsupported.
 
 The **Routing / Usage & cost** tabs share the current-session/all scope selector and remember the chosen page. Connection status and **Refresh** stay visible in the same header positions on both pages, including while usage is loading. Usage & cost reads the persisted gateway-call ledger, refreshes every 30 seconds or on demand, and groups all models by provider/model. It is independent of the routing model filter. Total tokens are `input + output + cache_read + cache_write`; reasoning is already included in output. Handed-on attempts contribute tokens and cost without counting as another request. Token/call counts use decimal K/M/B/T units; summary, model and cache hover details use the same compact units.
 
@@ -101,11 +103,11 @@ Native mod commands `magpie-route.refresh`, `magpie-route.locale`, `magpie-route
 
 The mod:
 
-- Reads only the gateway port from `~/.config/magpie/settings.json`, defaulting to 3425.
-- Uses loopback HTTP at `127.0.0.1:<port>/`: `GET v1/models`, `GET v1/magpie/trace?after=…`, `GET v1/magpie/usage?period=all`, `GET v1/magpie/usage/requests?period=all&via=through&limit=…&offset=…` (with `q` for session reads), `GET v1/magpie/quotas?kept=1`, and explicit `POST v1/magpie/quotas/refresh`.
-- Runs `python3`, `hc get --json` and `lsof` to bind a local terminal's foreground OMP process to its uniquely open root session.
+- Reads only the gateway port from the selected machine's `~/.config/magpie/settings.json`, defaulting to 3425.
+- Uses that machine's loopback HTTP at `127.0.0.1:<port>/`: `GET v1/models`, `GET v1/magpie/trace?after=…`, `GET v1/magpie/usage?period=all`, `GET v1/magpie/usage/requests?period=all&via=through&limit=…&offset=…` (with `q` for session reads), `GET v1/magpie/quotas?kept=1`, and explicit `POST v1/magpie/quotas/refresh`. Remote requests execute through the existing Herdr connection.
+- Runs `python3`, `hc get --json` and `lsof` on the selected machine to bind its terminal's foreground OMP process to its uniquely open root session.
 - Reads at most 16 KiB / four leading lines of candidate session files under `~/.omp/agent/sessions`; it does not scan full conversation history.
-- Runs `python3` to reduce local files under `~/.config/magpie/routing` within the bounds above, following a relocated config directory's symlink. This is Magpie's routing archive, not OMP conversation history. Matching uses exact session and group equality. The helper parses routing records locally and returns only request/time, session/group and an allowlist of classifier metadata; prompts, accounts, paths and raw errors never enter its output or the sidebar's classification cache.
+- Runs `python3` on the selected machine to reduce files under its `~/.config/magpie/routing` within the bounds above, following a relocated config directory's symlink. This is Magpie's routing archive, not OMP conversation history. Matching uses exact session and group equality. The helper returns only request/time, session/group and an allowlist of classifier metadata; prompts, accounts, paths and raw errors never enter its output or the sidebar's classification cache.
 - Retains a narrowed set of routing fields rather than full trace prompt metadata. Account names are masked by default. Provider-supplied raw text keeps its original language.
 - Reduces Usage responses immediately to aggregate/model counters and the recording start; session, account, key and file-path fields are discarded.
 - Narrows accounting pages immediately to token/price counters, matching the linked session locally; raw ledger rows, account/key metadata and response IDs are not retained in view state.
@@ -117,6 +119,8 @@ The request list is the gateway's recent cache, not a complete session archive. 
 Runtime source lives in `mods/magpie-route/`. Locale dictionaries are grouped by UI, graph and system diagnostics in `locales/`; both languages must expose the same keys and interpolation parameters. `i18n.js` handles message descriptors, plurals and selected-locale date/number formatting. Do not place translated UI text directly in JavaScript renderers or the Python resolver.
 
 Herdr's installed `herdr.d.ts` and `gpui-kit.d.ts` define the available native APIs. Generated SDK declarations and local app state are intentionally excluded. Run `herdr-app check` and inspect real narrow/wide panels in both languages after changing the UI.
+
+Run `BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 bun test tests/remote-machine.test.js` for remote transport and machine-switch isolation coverage. Disabling Bun's transpiler cache keeps virtual-module test imports isolated. The transport tests execute the actual Python request code against an isolated loopback server; Herdr machine dispatch is simulated, so a connected SSH machine is still needed for end-to-end remote verification.
 
 ## License
 

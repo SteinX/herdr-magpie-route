@@ -1,6 +1,6 @@
 # Herdr Magpie Route
 
-A native right sidebar that shows where a local OMP request goes through Magpie, the model that actually answers, and global account quotas. English is the default, with an explicit Simplified Chinese switch.
+A native right sidebar that follows the active Herdr space's machine and shows where its OMP requests go through Magpie, the model that actually answers, and that machine's global account quotas. English is the default, with an explicit Simplified Chinese switch.
 
 ![Herdr Magpie Route](preview.png)
 
@@ -12,7 +12,7 @@ A resizable 420px sidebar, minimum 340px and maximum 680px. Surface and text fol
 
 Top to bottom:
 
-1. Magpie title, connection state, refresh and the shortened source session.
+1. Magpie title, connection state, refresh, selected data-source machine and the shortened source session.
 2. Routing / Usage & cost page segments, then shared current-session/all scope, language, Arrange/Done and account-identity controls; model filter and motion controls appear on Routing only. Connection status and Refresh remain in the same header positions on both pages, including busy states.
 3. A compact global input-cache card: two-decimal weighted hit rate, cache-read/eligible tokens, excluded unknown tokens, recording start and manual refresh.
 4. A routing card: OMP sources on the left and individual model/effort destinations on the right, each with its global provider/model cache hit rate. Keep at least 24px between node columns after subtracting layout/card padding at the minimum width. Do not insert a central gateway box.
@@ -38,6 +38,8 @@ The English/Chinese toggle is persisted with localStorage and updates existing d
 
 Refresh restarts stream reading and session binding. Automatic quota reads use cached gateway results; explicit quota refresh can contact upstream providers through Magpie. Disable refresh controls while their corresponding operation is busy. Keep hover, press, selected and keyboard-focus states visible without moving layout bounds.
 
+Follow `spaces().find(space => space.active).machine` for every data read. Local requests use native fetch; remote requests execute Python through Herdr `exec(..., {on: machine})` to access the remote loopback gateway. Read the port on that same machine. Send bundled helper source to remote Python for exact session binding and bounded classifier history; do not require remote mod installation or fall back to local data. Strip only the selected machine's exact address prefix before asking remote hc about its terminal. All/Global scopes apply only to the selected machine. On machine changes clear all readings and invalidate configuration, binding and polling jobs before publishing the new machine label; reject every delayed result from the old source.
+
 Read global cache metrics from `usage?period=all` every 30 seconds or on explicit refresh; use `cache_read / (input + cache_read + cache_write - cache_unknown)` and keep two decimal places. The overall and provider/model metrics cover the recorded Magpie usage log, including client-reported and classifier calls, independently of routing filters, efforts and seats. Exclude unknown cache input; unavailable or zero-denominator rates stay unknown. Discard ledger identities and paths immediately after narrowing the response.
 
 The classifier section sits after quotas and before recent requests. Keep its default collapsed summary short, with an explicit Expand/Collapse control and request/time context; never substitute another request's classifier for a selected request that has none. Metadata comes only from `rule.classified`: model, available/chosen intent, current effort, difficulty 0–3, confidence, latency, same-message decision reuse, previous intent/effort, parent-group effort and fallback policy. Missing fields stay unknown. Keep raw classifier errors out of view state and distinguish decision reuse from token caching.
@@ -48,7 +50,7 @@ When the gateway is offline, disclose cached/stale results. When session binding
 
 ## Built from
 
-Distribution tree: `mods/magpie-route/` contains `main.js`, `route-view.js`, `panel-order.js`, `routing-graph.js`, `routing-data.js`, `usage-format.js`, `i18n.js`, `locales/`, `resolve-session.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
+Distribution tree: `mods/magpie-route/` contains `main.js`, `machine-source.js`, `route-view.js`, `panel-order.js`, `routing-graph.js`, `routing-data.js`, `usage-format.js`, `i18n.js`, `locales/`, `resolve-session.py`, `classifier-history.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
 
 Place a block with ID `magpie-route-panel` and `content.mod: magpie-route` beside the active terminal area in a user-owned horizontal layout row. The manifest is focusable and has `place: none`. The mod reads no pane props.
 
@@ -63,7 +65,7 @@ Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometri
 - Verified with Herdr App 0.1.15 on macOS. Do not claim Windows support or an unverified minimum Magpie version.
 - Keep both the folder name magpie-route and layout node ID magpie-route-panel, or update helper/asset paths and visibility detection together.
 - Model filtering offers a dropdown menu to directly select all models or any active routing group reported by Magpie (configured `/v1/models` groups first, then observed trace groups).
-- Session identity is local and exact. Never guess it from directory, model, account, session age or tab title; refuse remote/ambiguous sources.
+- Session identity is exact and belongs to the selected machine. Never guess it from directory, model, account, session age or tab title; refuse ambiguous sources.
 - Gateway cache retention is authoritative. Do not truncate active routes to a guessed fixed row limit.
 - Do not add the trace wait query: any nonempty value can hold the server call for 25 seconds.
 - Idle/candidate/finished edges do not move. Keep native motion independent of polling and share path/frame resources per view.
@@ -73,7 +75,7 @@ Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometri
 ## Done when
 
 - Herdr's mod check passes and the block appears in a personal layout.
-- Current-session filtering matches the foreground local OMP session exactly; all-request browsing works when binding is unavailable.
+- Current-session filtering matches the selected machine's foreground OMP session exactly; all-request browsing works when binding is unavailable. Switching machines never displays old-machine readings, including when IDs and ports overlap.
 - Observed live paths animate; candidates and completed paths do not.
 - Model/provider marks remain distinct and legible in the host theme.
 - Recent preview, expansion, page bounds, shrink-clamping and filter resets work.
