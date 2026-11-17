@@ -8,6 +8,7 @@ import { createMachineSource } from "./machine-source.js";
 
 const PANEL = "magpie-route-panel";
 const REBIND_MS = 5000;
+const RETRY_MS = 5000;
 const QUOTA_MS = 30000;
 const USAGE_MS = 30000;
 const ACCOUNTING_MS = 30000;
@@ -51,13 +52,15 @@ export default class MagpieRoute extends View {
     this.classifierHistory = null;
     this.classifierHistoryJob = null;
     this.streamGeneration = 0;
-    this.streamEnabled = true;
+    this.traceRetryAt = 0;
     this.connection = "unbound";
     this.error = null;
     this.source = null;
     this.port = null;
     this.configError = null;
     this.configGeneration = 0;
+    this.configJob = null;
+    this.configRetryAt = 0;
     this.quotaJob = null;
     this.quotaBusy = false;
     this.quotas = [];
@@ -113,6 +116,7 @@ export default class MagpieRoute extends View {
     cx.timer.every(1000, cx => {
       if (!shown(layout())) { this.hide(); return; }
       if (!this.visible || this.closed) return;
+      if (this.port === null || this.configError) this.loadPort(cx);
       if (this.target?.terminal && Date.now() - this.lastBinding >= REBIND_MS) this.resolve(cx);
       this.pollTrace(cx);
       this.pollClassifierHistory(cx);
@@ -210,6 +214,8 @@ export default class MagpieRoute extends View {
   switchSource(machine, cx) {
     this.source = machine === undefined ? null : createMachineSource(machine);
     this.configGeneration++;
+    this.configJob = null;
+    this.configRetryAt = 0;
     this.configError = null;
     this.port = null;
     this.invalidateStreamJobs();
@@ -230,7 +236,7 @@ export default class MagpieRoute extends View {
     this.lastUsage = 0;
     this.error = null;
     this.connection = "connecting";
-    this.streamEnabled = true;
+    this.traceRetryAt = 0;
     this.classifierExpanded = false;
     this.resetRecent();
     this.modelFilterOpen = false;
@@ -276,8 +282,7 @@ export default class MagpieRoute extends View {
     }
     if (machineChanged && this.source) this.loadPort(cx);
     if (opening || machineChanged) {
-      this.connection = !this.source ? "unbound" : this.configError ? "offline" : "connecting";
-      this.streamEnabled = true;
+      this.connection = !this.source ? "unbound" : this.configError || this.error ? "offline" : "connecting";
       this.pollTrace(cx);
       this.pollQuotas(cx);
       this.pollGroups(cx);
@@ -287,29 +292,37 @@ export default class MagpieRoute extends View {
   }
 
   loadPort(cx) {
-    const generation = ++this.configGeneration;
-    const source = this.source;
-    this.configError = null;
+    if (!this.visible || this.closed || !this.source || this.configJob?.source === this.source
+      || Date.now() < this.configRetryAt) return;
+    const job = { generation: ++this.configGeneration, source: this.source };
+    this.configJob = job;
     cx.spawn(async cx => {
+      const current = () => job.generation === this.configGeneration && job.source === this.source && !this.closed;
       try {
-        const port = await source.loadPort();
-        if (generation !== this.configGeneration || source !== this.source || this.closed) return;
+        const port = await job.source.loadPort();
+        if (!current()) return;
         if (this.trace.port !== null && this.trace.port !== port) {
           this.trace = emptyTrace();
           this.classifierHistory = null;
         }
         this.port = port;
+        this.configError = null;
+        this.configRetryAt = 0;
       } catch (error) {
-        if (generation !== this.configGeneration || source !== this.source || this.closed) return;
+        if (!current()) return;
         this.configError = { key: "system.configFailed", values: { error: failure(error) } };
+        this.configRetryAt = Date.now() + RETRY_MS;
         this.connection = "offline";
+      } finally {
+        if (this.configJob === job) this.configJob = null;
+        if (!current()) return;
+        cx.notify();
+        this.pollTrace(cx);
+        this.pollQuotas(cx);
+        this.pollGroups(cx);
+        this.pollUsage(cx);
+        this.pollAccounting(cx);
       }
-      cx.notify();
-      this.pollTrace(cx);
-      this.pollQuotas(cx);
-      this.pollGroups(cx);
-      this.pollUsage(cx);
-      this.pollAccounting(cx);
     });
   }
 
@@ -354,7 +367,6 @@ export default class MagpieRoute extends View {
         this.session = null;
         if (this.scope === "session") this.resetAccounting();
         this.selectedId = null;
-        this.bindingPaused = true;
         this.reason = { key: "system.bindingFailed", values: { error: failure(error) } };
         cx.notify();
       } finally {
@@ -370,7 +382,7 @@ export default class MagpieRoute extends View {
   }
 
   pollTrace(cx) {
-    if (!this.visible || this.closed || this.traceJob || !this.streamEnabled || this.port === null || this.configError) return;
+    if (!this.visible || this.closed || this.traceJob || Date.now() < this.traceRetryAt || this.port === null || this.configError) return;
     const job = { generation: this.streamGeneration, source: this.source, port: this.port };
     this.traceJob = job;
     cx.spawn(async cx => {
@@ -385,13 +397,14 @@ export default class MagpieRoute extends View {
         if (this.selectedId !== null && !next.routes.has(this.selectedId)) this.selectedId = null;
         this.connection = "live";
         this.error = null;
+        this.traceRetryAt = 0;
         if (changed) cx.notify();
         this.pollClassifierHistory(cx);
       } catch (error) {
         if (job.source !== this.source || job.generation !== this.streamGeneration || !this.visible || this.closed) return;
         this.connection = "offline";
         this.error = { key: "system.traceFailed", values: { error: failure(error) } };
-        this.streamEnabled = false;
+        this.traceRetryAt = Date.now() + RETRY_MS;
         cx.notify();
       } finally {
         if (this.traceJob === job) this.traceJob = null;
@@ -409,7 +422,7 @@ export default class MagpieRoute extends View {
   pollClassifierHistory(cx) {
     const key = this.classifierHistoryKey();
     if (!this.visible || this.closed || this.page !== "routing" || !key || this.classifierHistoryJob
-      || this.classifierHistory?.key === key) return;
+      || this.classifierHistory?.key === key && (!this.classifierHistory.retryAt || Date.now() < this.classifierHistory.retryAt)) return;
     const routes = this.routes();
     const route = routes.find(route => route.id === this.selectedId) ?? routes[0];
     if (route?.classifier && !route.rule?.held && !route.rule?.waits) return;
@@ -430,7 +443,7 @@ export default class MagpieRoute extends View {
         this.trace = mergeClassifiers(this.trace, report.records);
         this.classifierHistory = { key, state: report.unavailable ? "unavailable" : report.partial ? "partial" : "ready" };
       } catch {
-        if (current()) this.classifierHistory = { key, state: "unavailable" };
+        if (current()) this.classifierHistory = { key, state: "unavailable", retryAt: Date.now() + RETRY_MS };
       } finally {
         if (this.classifierHistoryJob === job) {
           this.classifierHistoryJob = null;
@@ -532,6 +545,9 @@ export default class MagpieRoute extends View {
     // Each settings read owns its source so a late read cannot change the new port.
     this.source = createMachineSource(this.source.machine);
     this.port = null;
+    this.configJob = null;
+    this.configRetryAt = 0;
+    this.configError = null;
     this.trace = { ...emptyTrace(), port: this.trace.port, classifiers: this.trace.classifiers };
     this.classifierHistory = null;
     this.quotas = [];
@@ -545,7 +561,7 @@ export default class MagpieRoute extends View {
     this.error = null;
     if (this.scope === "all") this.resetAccounting();
     this.connection = "connecting";
-    this.streamEnabled = true;
+    this.traceRetryAt = 0;
     this.resetBinding();
     this.reason = this.target?.reason ?? null;
     this.loadPort(cx);

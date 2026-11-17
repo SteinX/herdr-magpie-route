@@ -9,6 +9,7 @@ mock.module("../mods/magpie-route/route-view.js", () => ({ renderRouting: view =
 const PORT = 43127;
 const SESSION = "shared-session";
 const realFetch = globalThis.fetch;
+const realNow = Date.now;
 const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 const runtime = {};
 mock.module("herdr", () => Object.fromEntries([
@@ -38,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Date.now = realNow;
   globalThis.fetch = realFetch;
   if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
   else delete globalThis.localStorage;
@@ -176,13 +178,15 @@ function select(machine, tab = "tab", terminal = `${machine === null ? "" : mach
 
 function context() {
   const queued = [];
+  const timers = [];
   const cx = {
-    queued, notify: mock(() => {}),
+    queued, timers, notify: mock(() => {}),
     focus_handle: () => ({ focus() {}, release() {} }),
-    timer: { every() {} },
+    timer: { every: (interval, callback) => timers.push({ interval, callback }) },
     spawn: task => queued.push(task),
     start: () => queued.splice(0).map(task => task(cx)),
     discard: () => { queued.length = 0; },
+    tick: () => { for (const timer of timers) timer.callback(cx); },
   };
   return cx;
 }
@@ -240,6 +244,63 @@ function expectCleared(view) {
   expect(view.selectedId).toBeNull();
   expect(view.session).toBeNull();
   expect(view.port).toBeNull();
+}
+
+async function settle(cx) {
+  while (cx.queued.length) await Promise.all(cx.start());
+}
+
+async function recoveryFixture({ machine = "A", config, trace, binding, history, request } = {}) {
+  let now = 100000;
+  Date.now = () => now;
+  const calls = { config: [], trace: [], binding: [], history: [], requests: [] };
+  runtime.readTextFile = mock(async path => path.split("/").at(-1));
+  runtime.exec = mock(async (_command, args, options) => {
+    const target = options.on;
+    if (args[1] === "resolve-session.py") {
+      calls.binding.push({ machine: target, terminal: args[2], at: now });
+      return result(binding ? await binding(target, args[2]) : { terminal: args[2], session: SESSION });
+    }
+    if (args[1] === "classifier-history.py") {
+      calls.history.push({ machine: target, at: now });
+      return result(history ? await history(target, ...args.slice(2))
+        : { scope: args[2], session: args[3], group: args[4], records: [] });
+    }
+    if (args.length === 2) {
+      calls.config.push({ machine: target, at: now });
+      return result(config ? await config(target) : { ok: true, port: PORT });
+    }
+    const [, , port, path, method, base] = args;
+    const seen = { machine: target, port, path, method, base, at: now };
+    calls.requests.push(seen);
+    let data;
+    if (path.startsWith("trace?")) {
+      calls.trace.push(seen);
+      data = trace ? await trace(target, path) : routePayload(target);
+    } else if (request) {
+      data = await request(seen);
+    }
+    if (data === undefined) {
+      if (path === "quotas/refresh") data = null;
+      else if (path === "quotas?kept=1") data = { object: "list", data: [] };
+      else if (path === "models") data = { data: [{ id: "group/test" }] };
+      else if (path === "usage?period=all") data = { period: "all", calls: 1, input: 1, cache_read: 0, cache_write: 0, models: [] };
+      else if (path.startsWith("usage/requests?")) data = { period: "all", total: 0, offset: 0, rows: [] };
+      else throw new Error(`Unexpected recovery request: ${path}`);
+    }
+    return result({ ok: true, status: 200, json: true, data });
+  });
+  select(machine);
+  const cx = context();
+  const view = new MagpieRoute();
+  view.init({}, cx);
+  cx.discard();
+  view.sync(cx);
+  await settle(cx);
+  return { view, cx, calls,
+    advance: ms => { now += ms; },
+    tick: async ms => { now += ms; cx.tick(); await settle(cx); },
+  };
 }
 
 describe("view machine isolation", () => {
@@ -406,4 +467,216 @@ describe("view machine isolation", () => {
     expect(runtime.readTextFile).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
+});
+
+describe("automatic connection recovery", () => {
+  test("trace retries after five seconds without refresh or discarding observed data", async () => {
+    let offline = false;
+    let recovered = false;
+    const { view, cx, calls, tick } = await recoveryFixture({ trace: machine => {
+      if (offline) throw new Error("Disconnected");
+      const payload = routePayload(recovered ? "recovered" : machine);
+      if (recovered) { payload.seq = 2; payload.routes[0].seq = 2; }
+      return payload;
+    } });
+    expect(cx.timers.map(timer => timer.interval)).toEqual([1000]);
+    const { source, trace, quotas, usage, groups } = view;
+    offline = true;
+    await tick(1000);
+    expect(view.connection).toBe("offline");
+    expect(view.error.key).toBe("system.traceFailed");
+    expect(view.trace).toBe(trace);
+    expect(view.quotas).toBe(quotas);
+    expect(view.usage).toBe(usage);
+    expect(view.groups).toBe(groups);
+    expect(calls.trace).toHaveLength(2);
+    offline = false;
+    recovered = true;
+    await tick(4999);
+    expect(calls.trace).toHaveLength(2);
+    expect(view.connection).toBe("offline");
+    await tick(1);
+    expect(calls.trace).toHaveLength(3);
+    expect(calls.trace.at(-1).path).toBe("trace?after=1");
+    expect(view.source).toBe(source);
+    expect(view.connection).toBe("live");
+    expect(view.error).toBeNull();
+    expect(view.trace.seq).toBe(2);
+    expect(view.routes()[0].provider).toBe("recovered");
+  });
+
+  test("config retries after five seconds and stays single-flight until the port loads", async () => {
+    const gate = deferred();
+    let attempts = 0;
+    const { view, cx, calls, advance, tick } = await recoveryFixture({ config: () => {
+      if (++attempts === 1) throw new Error("Settings unavailable");
+      return gate.promise;
+    } });
+    const { source, configError } = view;
+    expect(view.port).toBeNull();
+    expect(view.connection).toBe("offline");
+    expect(configError.key).toBe("system.configFailed");
+    expect(calls.requests).toHaveLength(0);
+    await tick(4999);
+    expect(calls.config).toHaveLength(1);
+    advance(1);
+    cx.tick();
+    const pending = cx.start();
+    expect(calls.config).toHaveLength(2);
+    view.loadPort(cx);
+    await tick(5000);
+    expect(calls.config).toHaveLength(2);
+    expect(view.configError).toBe(configError);
+    expect(view.connection).toBe("offline");
+    expect(calls.requests).toHaveLength(0);
+    gate.resolve({ ok: true, port: PORT });
+    await Promise.all(pending);
+    await settle(cx);
+    expect(view.source).toBe(source);
+    expect(view.port).toBe(PORT);
+    expect(view.configError).toBeNull();
+    expect(view.connection).toBe("live");
+    expect(view.routes()[0].provider).toBe("A");
+    expect(view.usage.calls).toBe(1);
+    expect(calls.requests.every(call => call.port === String(PORT))).toBe(true);
+  });
+
+  test("resolver exceptions retry on the existing five-second binding timer", async () => {
+    let attempts = 0;
+    const { view, calls, tick } = await recoveryFixture({ binding: (_machine, terminal) => {
+      if (++attempts === 1) throw new Error("Remote resolver unavailable");
+      return { terminal, session: SESSION };
+    } });
+    expect(view.session).toBeNull();
+    expect(view.reason.key).toBe("system.bindingFailed");
+    expect(view.bindingPaused).toBe(false);
+    await tick(4999);
+    expect(calls.binding).toHaveLength(1);
+    await tick(1);
+    expect(calls.binding).toHaveLength(2);
+    expect(view.session).toBe(SESSION);
+    expect(view.reason).toBeNull();
+    expect(view.routes()[0].provider).toBe("A");
+  });
+
+  test("an explicit invalid terminal address remains paused on timer ticks", async () => {
+    const { view, cx, calls, tick } = await recoveryFixture();
+    select("A", "invalid", "other/ta");
+    view.sync(cx);
+    await settle(cx);
+    const attempts = calls.binding.length;
+    expect(view.bindingPaused).toBe(true);
+    expect(view.reason.key).toBe("system.noLocalTerminal");
+    await tick(10000);
+    expect(calls.binding).toHaveLength(attempts);
+    expect(view.session).toBeNull();
+    expect(view.bindingPaused).toBe(true);
+  });
+
+  test("failed archive reads retry at a paced interval and ready history survives reconnection", async () => {
+    let offline = false;
+    let archiveAvailable = false;
+    const { view, calls, tick } = await recoveryFixture({
+      trace: machine => {
+        if (offline) throw new Error("Disconnected");
+        const payload = routePayload(machine);
+        payload.routes[0].rule = null;
+        return payload;
+      },
+      history: (_machine, scope, session, group) => {
+        if (!archiveAvailable) throw new Error("Archive disconnected");
+        return { scope, session, group, records: [{
+          id: 7, time: "2026-11-16T11:00:00Z", session: SESSION, group: "group/test",
+          classifier: { by: "archive", score: 1, sure: 1 },
+        }] };
+      },
+    });
+    expect(view.classifierHistory.state).toBe("unavailable");
+    expect(calls.history).toHaveLength(1);
+    offline = true;
+    await tick(1000);
+    await tick(3999);
+    expect(calls.history).toHaveLength(1);
+    offline = false;
+    archiveAvailable = true;
+    await tick(1001);
+    expect(view.connection).toBe("live");
+    expect(view.classifierHistory.state).toBe("ready");
+    expect(view.trace.classifiers.size).toBe(1);
+    expect(calls.history).toHaveLength(2);
+    const ready = view.classifierHistory;
+    offline = true;
+    await tick(1000);
+    offline = false;
+    await tick(5000);
+    expect(view.connection).toBe("live");
+    expect(view.classifierHistory).toBe(ready);
+    expect(calls.history).toHaveLength(2);
+  });
+
+  test("reconnection never replays an explicit quota refresh POST", async () => {
+    let offline = false;
+    const { view, cx, calls, tick } = await recoveryFixture({
+      trace: machine => {
+        if (offline) throw new Error("Disconnected");
+        return routePayload(machine);
+      },
+      request: seen => {
+        if (seen.method === "POST") throw new Error("Refresh disconnected");
+      },
+    });
+    view.refreshQuotas(cx);
+    await settle(cx);
+    expect(view.quotaError.key).toBe("system.quotaFailed");
+    offline = true;
+    await tick(1000);
+    offline = false;
+    await tick(5000);
+    expect(view.connection).toBe("live");
+    expect(calls.requests.filter(call => call.method === "POST")).toHaveLength(1);
+    const reads = calls.requests.filter(call => call.path === "quotas?kept=1").length;
+    await tick(23999);
+    expect(calls.requests.filter(call => call.path === "quotas?kept=1")).toHaveLength(reads);
+    await tick(1);
+    expect(view.quotaError).toBeNull();
+    expect(calls.requests.filter(call => call.path === "quotas?kept=1")).toHaveLength(reads + 1);
+    expect(calls.requests.filter(call => call.method === "POST")).toHaveLength(1);
+  });
+
+  for (const failure of ["config", "trace", "binding"]) {
+    for (const state of ["hidden", "closed"]) {
+      test(`${state} panels cannot retry failed ${failure} work`, async () => {
+        const { view, cx, tick } = await recoveryFixture({ [failure]: () => { throw new Error("Disconnected"); } });
+        if (state === "closed") view.close();
+        else runtime.layout = () => ({ id: "magpie-route-panel", hidden: true });
+        const executions = runtime.exec.mock.calls.length;
+        const fileReads = runtime.readTextFile.mock.calls.length;
+        await tick(60000);
+        expect(view.visible).toBe(false);
+        expect(cx.queued).toHaveLength(0);
+        expect(runtime.exec).toHaveBeenCalledTimes(executions);
+        expect(runtime.readTextFile).toHaveBeenCalledTimes(fileReads);
+      });
+    }
+
+    test(`switching machines before ${failure} retry dispatches only the active source`, async () => {
+      const { view, cx, calls, tick } = await recoveryFixture({ [failure]: (machine, terminal) => {
+        if (machine === "A") throw new Error("A disconnected");
+        if (failure === "config") return { ok: true, port: PORT };
+        if (failure === "trace") return routePayload(machine);
+        return { terminal, session: SESSION };
+      } });
+      const boundary = runtime.exec.mock.calls.length;
+      select("B");
+      view.sync(cx);
+      await settle(cx);
+      await tick(5000);
+      expect(view.source.machine).toBe("B");
+      expect(view.connection).toBe("live");
+      expect(view.session).toBe(SESSION);
+      expect(view.routes()[0].provider).toBe("B");
+      expect(runtime.exec.mock.calls.slice(boundary).every(call => call[2].on === "B")).toBe(true);
+      expect(calls.config.filter(call => call.machine === "A")).toHaveLength(1);
+    });
+  }
 });
