@@ -3,7 +3,7 @@ import { messageError } from "./i18n.js";
 
 const DEFAULT_PORT = 3425;
 const EXEC_TIMEOUT = 8000;
-const HELPERS = new Set(["resolve-session.py", "classifier-history.py"]);
+const HELPERS = new Set(["resolve-session.py", "classifier-history.py", "session-titles.py"]);
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const keys = (value, expected) => object(value) && Object.keys(value).length === expected.length
   && expected.every(key => Object.prototype.hasOwnProperty.call(value, key));
@@ -241,7 +241,7 @@ export function createMachineSource(machine = null) {
         let source;
         try { source = await readTextFile(path); } catch { throw new Error("Could not read the installed helper"); }
         if (typeof source !== "string" || !source.trim()) throw new Error("The installed helper is unavailable");
-        // Both helpers use sys.argv[1:], which is unchanged with Python's -c form.
+        // Helpers use sys.argv[1:], which is unchanged with Python's -c form.
         command = ["-c", source, ...args];
       }
       const result = await execute(machine, command, timeout);

@@ -61,6 +61,17 @@ function newest(a, b) {
   return a.index - b.index;
 }
 
+function hasActiveAttempt(route) {
+  if (!object(route) || !unfinished(route)) return false;
+  const attempts = list(route.tries);
+  return attempts.length > 0 && reportedAttemptState(attempts[attempts.length - 1]) === "working";
+}
+
+export function graphSelection(routes, selected = null) {
+  if (!object(selected) || hasActiveAttempt(selected)) return selected;
+  return list(routes).some(route => route !== selected && hasActiveAttempt(route)) ? null : selected;
+}
+
 function visibleRoutes(routes, selected) {
   if (object(selected)) return [selected];
   const ordered = list(routes).filter(object).map((route, index) => ({ route, index })).sort(newest);
@@ -165,10 +176,15 @@ export function buildRoutingGraph(routes, selected = null) {
     const add = (targetId, fields, observation) => {
       let target = targetMap.get(targetId);
       if (!target) {
-        target = aggregate(targetId, fields);
+        target = aggregate(targetId, { ...fields, _sessions: new Map() });
         targetMap.set(targetId, target);
       }
       record(target, observation, request);
+      // Only an observed, currently active attempt proves this session uses the target.
+      if (observation.observed && observation.state === "active"
+        && typeof route.session === "string" && text(route.session)) {
+        target._sessions.set(tuple([agent, route.session]), { agent, id: route.session });
+      }
       const edgeId = tuple([sourceId, targetId]);
       let edge = edgeMap.get(edgeId);
       if (!edge) {
@@ -252,6 +268,9 @@ export function buildRoutingGraph(routes, selected = null) {
   if (!pinned) targets.sort((a, b) => compare(a.provider, b.provider) || compare(a.model, b.model)
     || compare(a.seatKey, b.seatKey) || compare(a.effort, b.effort) || compare(a.id, b.id));
   for (const target of targets) {
+    target.sessions = [...target._sessions.values()].sort((a, b) => compare(a.id, b.id) || compare(a.agent, b.agent));
+    target.sessionIds = [...new Set(target.sessions.map(session => session.id))].sort(compare);
+    delete target._sessions;
     if (target.observed) target.kind = "attempt";
   }
   const seats = new Map();
@@ -394,9 +413,16 @@ function targetPresentation(env, target, width, pinned) {
   const detail = wrapped(detailText, width - 20 - (providerIcon ? 17 : 0), 11);
   const state = wrapped(stateText, width - 29, 10);
   const cache = wrapped(cacheText, width - 20, 10);
-  return { title, detail, state, cache, modelIcon, providerIcon,
-    height: Math.max(87, 32 + title.lines * 15 + detail.lines * 14 + state.lines * 13 + cache.lines * 13),
+  const sessions = target.sessions.flatMap(session => {
+    const reportedTitle = /^omp(?:\b|[-_])/i.test(session.agent) ? env.view?.sessionTitles?.get(session.id) : "";
+    if (!text(reportedTitle)) return [];
+    const title = safe(env, reportedTitle, "");
+    return title ? [{ title, label: env.msg("graph.target.session", { title: title.replace(/\s+/g, " ") }) }] : [];
+  });
+  return { title, detail, state, cache, sessions, modelIcon, providerIcon,
+    height: Math.max(87, 32 + title.lines * 15 + detail.lines * 14 + state.lines * 13 + cache.lines * 13) + sessions.length * 17,
     tooltip: [env.msg(target.kind === "candidate" ? "graph.target.candidateModel" : "graph.target.actualModel", { model }), detailText, stateText, cacheTooltip,
+      ...sessions.map(session => env.msg("graph.target.session", { title: session.title })),
       target.observed ? env.msg("graph.target.observedCounts", {
         attempts: env.msg("graph.target.observedAttempts", { count: target.attemptCount }),
         requests: env.msg("graph.source.requests", { count: target.requestCount }),
@@ -437,7 +463,9 @@ function targetNode(env, target, presentation, x, y, width, index) {
     .child(h_flex().w_full().min_w(0).items_center().gap(5)
       .child(div().size(4).flex_none().rounded(2).bg(color))
       .child(label(presentation.state.value, color, 10, 13).flex_1()))
-    .child(label(presentation.cache.value, env.t.muted, 10, 13));
+    .child(label(presentation.cache.value, env.t.muted, 10, 13))
+    .children(presentation.sessions.map(session => div().w_full().min_w(0).h(13).flex_none().truncate()
+      .text_color(env.t.muted).text_size(10).line_height("13px").tooltip(session.title).child(session.label)));
 }
 
 function pointOnCurve(curve, t) {
@@ -479,7 +507,7 @@ function renderCache(env) {
  * Per-view cache retains only visible immutable paths/slots plus one fixed frame bank.
  */
 export function renderRoutingGraph(env, routes, selected = null) {
-  const graph = buildRoutingGraph(routes, selected);
+  const graph = buildRoutingGraph(routes, graphSelection(routes, selected));
   const cache = renderCache(env);
   const nextPaths = new Map();
   // Layout padding reduces the measured root; keep a 24px lane without overflowing it.

@@ -303,6 +303,42 @@ async function recoveryFixture({ machine = "A", config, trace, binding, history,
   };
 }
 
+describe("session display titles", () => {
+  test("reads only active scoped sessions and updates renamed titles", async () => {
+    const { view, cx, source } = await viewFixture();
+    const route = view.trace.routes.get(7);
+    view.trace.routes.set(7, { ...route, agent: "omp", done: false, state: "working" });
+    let title = "First title";
+    source.runHelper = mock(async (name, args) => {
+      expect(name).toBe("session-titles.py");
+      expect(JSON.parse(args[0])).toEqual([SESSION]);
+      return result({ titles: [{ session: SESSION, title }, { session: "unrequested", title: "Ignore" }] });
+    });
+    view.pollSessionTitles(cx);
+    await settle(cx);
+    expect([...view.sessionTitles]).toEqual([[SESSION, "First title"]]);
+    title = "Renamed title";
+    view.lastSessionTitles = 0;
+    view.pollSessionTitles(cx);
+    await settle(cx);
+    expect(view.sessionTitles.get(SESSION)).toBe("Renamed title");
+  });
+
+  test("delayed old-machine titles cannot appear under a new machine", async () => {
+    const { view, cx, source } = await viewFixture();
+    view.trace.routes.set(7, { ...view.trace.routes.get(7), agent: "omp", done: false, state: "working" });
+    const gate = deferred();
+    source.runHelper = () => gate.promise;
+    view.pollSessionTitles(cx);
+    const pending = cx.start();
+    select("B");
+    view.sync(cx);
+    cx.discard();
+    gate.resolve(result({ titles: [{ session: SESSION, title: "Old machine" }] }));
+    await Promise.all(pending);
+    expect(view.sessionTitles.size).toBe(0);
+  });
+});
 describe("view machine isolation", () => {
   for (const hidden of [false, true]) {
     test(`${hidden ? "hidden" : "visible"} A to B clears all A data synchronously`, async () => {

@@ -52,6 +52,9 @@ export default class MagpieRoute extends View {
     this.classifierHistory = null;
     this.classifierHistoryJob = null;
     this.streamGeneration = 0;
+    this.sessionTitles = new Map();
+    this.sessionTitlesJob = null;
+    this.lastSessionTitles = 0;
     this.traceRetryAt = 0;
     this.connection = "unbound";
     this.error = null;
@@ -203,6 +206,8 @@ export default class MagpieRoute extends View {
   invalidateStreamJobs() {
     this.streamGeneration++;
     this.traceJob = null;
+    this.sessionTitlesJob = null;
+    this.lastSessionTitles = 0;
     this.classifierHistoryJob = null;
     this.quotaJob = null;
     this.quotaBusy = false;
@@ -225,6 +230,7 @@ export default class MagpieRoute extends View {
     this.recent.clear();
     this.trace = emptyTrace();
     this.classifierHistory = null;
+    this.sessionTitles = new Map();
     this.quotas = [];
     this.quotasUpdated = null;
     this.quotaError = null;
@@ -399,6 +405,7 @@ export default class MagpieRoute extends View {
         this.error = null;
         this.traceRetryAt = 0;
         if (changed) cx.notify();
+        this.pollSessionTitles(cx);
         this.pollClassifierHistory(cx);
       } catch (error) {
         if (job.source !== this.source || job.generation !== this.streamGeneration || !this.visible || this.closed) return;
@@ -409,6 +416,44 @@ export default class MagpieRoute extends View {
       } finally {
         if (this.traceJob === job) this.traceJob = null;
         if (this.visible && !this.closed && (job.source !== this.source || job.generation !== this.streamGeneration)) this.pollTrace(cx);
+      }
+    });
+  }
+
+  pollSessionTitles(cx) {
+    if (!this.visible || this.closed || this.page !== "routing" || !this.source || this.sessionTitlesJob
+      || Date.now() - this.lastSessionTitles < REBIND_MS) return;
+    const sessions = [...new Set(this.routes().filter(route => /^omp(?:\b|[-_])/i.test(route.agent) && !route.done
+      && !["done", "failed", "canceled"].includes(route.state)).map(route => route.session).filter(nonempty))].slice(0, 256);
+    const job = { source: this.source, generation: this.streamGeneration };
+    const current = () => job.source === this.source && job.generation === this.streamGeneration && this.visible && !this.closed;
+    this.sessionTitlesJob = job;
+    this.lastSessionTitles = Date.now();
+    cx.spawn(async cx => {
+      let titles = new Map();
+      try {
+        if (sessions.length) {
+          const result = await job.source.runHelper("session-titles.py", [JSON.stringify(sessions)], 3000);
+          if (result.code !== 0) throw new Error("Session titles unavailable");
+          const data = JSON.parse(result.stdout);
+          if (!Array.isArray(data?.titles)) throw new Error("Invalid session titles");
+          const requested = new Set(sessions);
+          for (const record of data.titles) {
+            if (requested.has(record?.session) && nonempty(record.title)) {
+              titles.set(record.session, record.title.replace(/\s+/g, " ").trim().slice(0, 512));
+            }
+          }
+        }
+      } catch {
+        // Optional display metadata: unavailable titles remain explicitly unnamed.
+      } finally {
+        if (this.sessionTitlesJob === job) this.sessionTitlesJob = null;
+        if (current()) {
+          const changed = titles.size !== this.sessionTitles.size
+            || [...titles].some(([session, title]) => this.sessionTitles.get(session) !== title);
+          this.sessionTitles = titles;
+          if (changed) cx.notify();
+        }
       }
     });
   }

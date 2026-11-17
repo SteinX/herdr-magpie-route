@@ -30,7 +30,7 @@ Usage & cost is a separate native scroll page: a scoped total-token/USD-estimate
 
 A live request has an active destination and native moving points along its observed path. Candidate-only routes are dashed and do not animate. Success, failure, cancellation and ended/continued attempts have distinct text labels as well as theme-derived colors. These are gateway request states; do not infer them from the terminal agent's working/idle status.
 
-Clicking a request toggles details and pins its observed route. Scope/model changes clear the old selection and reset recent-history pagination. Changing the terminal tab resets session-scoped browsing; global pagination stays on the same page. Clamp pages when the retained cache shrinks. Live requests are not paginated.
+Clicking a request toggles details and pins its observed route while that route has an active attempt. If the pinned route has no active attempt while another filtered request is active, the graph temporarily shows the live overview; the selected request and its details/classifier context remain pinned. Scope/model changes clear the old selection and reset recent-history pagination. Changing the terminal tab resets session-scoped browsing; global pagination stays on the same page. Clamp pages when the retained cache shrinks. Live requests are not paginated.
 
 Arrange mode replaces the expanded content with compact section rows. Drag only from the dotted grip; show before/after insertion lines and commit on release, with no order writes during hover. Escape, leaving the list, page changes and hiding the mod cancel an active drag. Up/down buttons and grip arrow keys provide alternatives. Persist independent Routing and Usage orders in localStorage; normalize duplicate/unknown IDs and append newly introduced sections. Restore default affects only the current page. Keep normal-mode panels free of reorder chrome.
 
@@ -52,13 +52,15 @@ When the gateway is offline, disclose cached/stale results. When session binding
 
 ## Built from
 
-Distribution tree: `mods/magpie-route/` contains `main.js`, `machine-source.js`, `route-view.js`, `panel-order.js`, `routing-graph.js`, `routing-data.js`, `usage-format.js`, `i18n.js`, `locales/`, `resolve-session.py`, `classifier-history.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
+Distribution tree: `mods/magpie-route/` contains `main.js`, `machine-source.js`, `route-view.js`, `panel-order.js`, `routing-graph.js`, `routing-data.js`, `usage-format.js`, `i18n.js`, `locales/`, `resolve-session.py`, `classifier-history.py`, `session-titles.py`, `brand-icons.js`, `icons/`, `omp.svg` and `mod.json`.
 
 Place a block with ID `magpie-route-panel` and `content.mod: magpie-route` beside the active terminal area in a user-owned horizontal layout row. The manifest is focusable and has `place: none`. The mod reads no pane props.
 
 Herdr APIs: View, native div/flex/Button/Progress primitives, focus handles, timers and spawned work; layout/spaces/panes/terminals/focused; home/appHome/readTextFile/exec/nextCommand/theme. Graph curves use PathBuilder/window.paint_path and native frame animation. No DOM, browser engine, Node APIs or runtime npm dependencies are involved.
 
 Data comes from Magpie's loopback trace, usage and quota endpoints. The Python standard-library resolver invokes hc and lsof, confirms foreground process identity twice and accepts only a uniquely open root OMP session. It reads bounded leading metadata rather than whole conversations. See README for exact commands, paths and privacy behavior.
+
+Active observed model destinations list short session titles, retaining full sanitized titles in the tooltip. Resolve titles by exact OMP ID from the selected machine's best-effort `~/.omp/agent/history.db` title index every five seconds (read-only, up to 256 IDs and 512 title characters each); do not scan conversation bodies, infer names, or display IDs as title fallbacks. Missing rows/custom profile stores produce no session row or tooltip placeholder; title index entries may be stale. Reject old-machine replies.
 
 Artwork: pinned Magpie brand SVGs with upstream MIT notice; an original geometric OMP pi marker. See THIRD_PARTY_NOTICES.md.
 
