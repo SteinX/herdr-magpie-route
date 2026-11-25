@@ -15,12 +15,10 @@ Top to bottom:
 1. Magpie title, connection state, refresh, selected data-source machine and the shortened source session.
 2. Routing / Usage & cost page segments, then shared current-session/all scope, language, Arrange/Done and account-identity controls; model filter and motion controls appear on Routing only. Connection status and Refresh remain in the same header positions on both pages, including busy states.
 3. A compact global input-cache card: two-decimal weighted hit rate, cache-read/eligible tokens, excluded unknown tokens, recording start and manual refresh.
-4. A routing card: OMP sources on the left and individual model/effort destinations on the right, each with its global provider/model cache hit rate. Keep at least 24px between node columns after subtracting layout/card padding at the minimum width. Do not insert a central gateway box.
-5. Live request rows, expandable per-request details and attempt/candidate records.
-6. Global provider quota cards, cached reading/reset timestamps and explicit refresh.
-7. A compact classifier section, collapsed by default; Expand/Collapse reveals full metadata for the exact selected request or the latest classification in the current filtered scope.
-8. Three recent request rows by default, with expand/collapse and five rows per page when expanded.
-9. A compact footer with global request/reroute/error totals and the cache-history limit.
+4. A routing card with the classifier stage above the connection diagram. OMP sources are on the left and individual model/effort destinations are on the right, each with its global provider/model cache hit rate. Keep at least 24px between node columns after subtracting layout/card padding at the minimum width.
+5. Global provider quota cards, cached reading/reset timestamps and explicit refresh.
+6. Three recent request rows by default, with in-flight requests before finished requests. Expand a row for details, attempts and candidates, or show five rows per page.
+7. A compact footer with global request/reroute/error totals and the cache-history limit.
 
 Model-family and provider icons are independent. A GPT model routed through another provider keeps its OpenAI model mark and the provider's own mark. Unknown families retain their text without a fabricated brand. Single-color marks use theme-tinted native SVG masks; colored marks keep their source colors.
 
@@ -30,7 +28,7 @@ Usage & cost is a separate native scroll page: a scoped total-token/USD-estimate
 
 A live request has an active destination and native moving points along its observed path. Candidate-only routes are dashed and do not animate. Success, failure, cancellation and ended/continued attempts have distinct text labels as well as theme-derived colors. These are gateway request states; do not infer them from the terminal agent's working/idle status.
 
-Clicking a request toggles details and pins its observed route while that route has an active attempt. If the pinned route has no active attempt while another filtered request is active, the graph temporarily shows the live overview; the selected request and its details/classifier context remain pinned. Scope/model changes clear the old selection and reset recent-history pagination. Changing the terminal tab resets session-scoped browsing; global pagination stays on the same page. Clamp pages when the retained cache shrinks. Live requests are not paginated.
+Show all in-flight requests in overview and keep only the latest finished request for a source session with no in-flight traffic. Opening a recent request expands its details. **Lock request** pins the graph to it until the user returns to overview, switches scope or the trace drops the request. Scope/model changes reset recent request pagination. Changing the terminal tab resets session-scoped browsing and preserves the global page. Clamp pages when the retained cache shrinks.
 
 Arrange mode replaces the expanded content with compact section rows. Drag only from the dotted grip; show before/after insertion lines and commit on release, with no order writes during hover. Escape, leaving the list, page changes and hiding the mod cancel an active drag. Up/down buttons and grip arrow keys provide alternatives. Persist independent Routing and Usage orders in localStorage; normalize duplicate/unknown IDs and append newly introduced sections. Restore default affects only the current page. Keep normal-mode panels free of reorder chrome.
 
@@ -44,7 +42,7 @@ Follow `spaces().find(space => space.active).machine` for every data read. Local
 
 Read global cache metrics from `usage?period=all` every 30 seconds or on explicit refresh; use `cache_read / (input + cache_read + cache_write - cache_unknown)` and keep two decimal places. The overall and provider/model metrics cover the recorded Magpie usage log, including client-reported and classifier calls, independently of routing filters, efforts and seats. Exclude unknown cache input; unavailable or zero-denominator rates stay unknown. Discard ledger identities and paths immediately after narrowing the response.
 
-The classifier section sits after quotas and before recent requests. Keep its default collapsed summary short, with an explicit Expand/Collapse control and request/time context; never substitute another request's classifier for a selected request that has none. Metadata comes only from `rule.classified`: model, available/chosen intent, current effort, difficulty 0–3, confidence, latency, same-message decision reuse, previous intent/effort, parent-group effort and fallback policy. Missing fields stay unknown. Keep raw classifier errors out of view state and distinguish decision reuse from token caching.
+Show a short classifier summary per parent or nested group, using the corresponding `rule.classified` fields. Preserve explicit no-intent answers and omit fields with no value. Expand details within the stage. Mark historical results with their request, time, session and group. Exclude raw classifier errors from view state and distinguish decision reuse from token caching.
 
 Accounting uses `usage/requests?period=all&via=through` for both scopes: All reads server totals and provider/model shares, while Session uses encoded `q` plus exact session equality across every offset page. Reject changed totals rather than returning an incomplete or double-counted read. Count tokens/cost from handed-on attempts without adding a call; exclude local rejections. Preserve priced zero, distinguish unavailable/partially priced estimates, and do not add imported direct-session history or reported calls. Guard asynchronous results by session, scope and view generations; never show a previous session's amount under a new session.
 

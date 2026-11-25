@@ -85,6 +85,7 @@ function normalizeClassifier(value) {
   const ms = number(value.ms);
   return {
     by: string(value.by), intents: strings(value.intents), intent: string(value.intent),
+    said: string(value.said).slice(0, 256),
     after: string(value.after), effort: string(value.effort),
     score: score !== null && score >= 0 && score <= 3 ? score : null,
     sure: sure !== null && sure >= 0 && sure <= 1 ? sure : null,
@@ -94,13 +95,21 @@ function normalizeClassifier(value) {
   };
 }
 
+function classifierForRule(group, rule) {
+  if (rule?.waits || rule?.held) return [];
+  const classifier = normalizeClassifier(rule?.classified);
+  return classifier ? [{ group, classifier }] : [];
+}
+
 function classifierRecord(route) {
-  const classifier = normalizeClassifier(route.classifier);
   const session = string(route.session);
   const group = routeGroup(route);
-  if (!session || !group || !classifier || classifier.failed || route.rule?.waits || route.rule?.held
-    || !counter(route.id) || !Number.isFinite(Date.parse(route.time))) return null;
-  return { id: route.id, time: string(route.time), session, group, asked: group, classifier };
+  if (!session || !group || !counter(route.id) || !Number.isFinite(Date.parse(route.time))) return null;
+  const classifications = list(route.classifications).filter(object).flatMap(entry => {
+    const classifier = normalizeClassifier(entry.classifier);
+    return classifier && !classifier.failed ? [{ group: string(entry.group), classifier }] : [];
+  });
+  return classifications.length ? { id: route.id, time: route.time, session, group, asked: group, classifications } : null;
 }
 
 // Classification records outlive trace IDs; they contain no candidates, prompts or errors.
@@ -149,7 +158,11 @@ function normalizeRoute(value) {
     provider: current?.candidate?.provider || string(value.provider), group,
     done: value.done === true, status: number(value.status), error: string(value.error),
     ms: number(value.ms), ttft_ms: number(value.ttft), rule: normalizeRule(value.rule),
-    classifier: normalizeClassifier(value.rule?.classified),
+    classifications: [
+      ...classifierForRule(group || string(value.model), value.rule),
+      ...list(value.nested).filter(object).flatMap(entry =>
+        classifierForRule(string(entry.group) || string(entry.name), entry.rule)),
+    ],
     tries, candidates, left, state: routeState(value, tries),
   };
 }
@@ -214,10 +227,22 @@ export async function readUsage(source) {
   const models = new Map();
   for (const model of data.models) {
     const metric = cacheMetric(model);
-    if (!metric || typeof model.provider !== "string" || typeof model.model !== "string") {
+    if (!metric || [model.provider, model.model].some(value => value !== undefined && typeof value !== "string")) {
       throw messageError("system.invalidUsage");
     }
-    models.set(JSON.stringify([model.provider, model.model]), metric);
+    // Magpie omits empty identities. Those rows are already counted in overall.
+    if (!model.provider || !model.model) continue;
+    const key = JSON.stringify([model.provider, model.model]);
+    const previous = models.get(key);
+    if (previous) {
+      // Magpie splits a provider/model by host. The routing card covers them all.
+      for (const field of ["input", "cacheRead", "cacheWrite", "cacheUnknown", "total", "samples"]) {
+        metric[field] += previous[field];
+        if (!counter(metric[field])) throw messageError("system.invalidUsage");
+      }
+      metric.rate = metric.total > 0 ? metric.cacheRead / metric.total : null;
+    }
+    models.set(key, metric);
   }
   // Discard ledger sessions, accounts, keys, file paths, and unrelated usage data.
   return { period: "all", since: string(data.since), calls: data.calls, overall, models };

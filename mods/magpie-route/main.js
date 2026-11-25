@@ -1,7 +1,7 @@
 import { View } from "gpui-kit";
 import { focused, layout, nextCommand, panes, spaces, terminals } from "herdr";
 import { availableGroups, emptyTrace, filterClassifiers, filterRoutes, mergeClassifiers, readAccounting, readGroups, readQuotas, readTrace, readUsage } from "./routing-data.js";
-import { renderRouting } from "./route-view.js";
+import { renderRouting, routeFocusKey } from "./route-view.js";
 import { createI18n, messageError } from "./i18n.js";
 import { PANEL_DEFAULTS, movePanel, normalizePanelOrders } from "./panel-order.js";
 import { createMachineSource } from "./machine-source.js";
@@ -96,6 +96,7 @@ export default class MagpieRoute extends View {
     this.masked = localStorage.getItem("masked") !== "false";
     this.motion = localStorage.getItem("motion") !== "false";
     this.selectedId = null;
+    this.pinnedRouteId = null;
     this.classifierExpanded = false;
     this.recentExpanded = false;
     this.recentPage = 0;
@@ -105,7 +106,7 @@ export default class MagpieRoute extends View {
     this._routingGraphCache = { paths: new Map(), frames: null };
     this.focusHandles = new Map(["refresh", "scope-session", "scope-all", "adaptive", "adaptive-menu", "privacy", "motion", "locale", "quota-refresh",
       "usage-refresh", "page-routing", "page-usage", "accounting-refresh", "classifier-toggle", "recent-toggle", "recent-prev", "recent-next",
-      "order-toggle", "order-reset"]
+      "graph-pin", "order-toggle", "order-reset"]
       .map(key => [key, cx.focus_handle()]));
     for (const [page, ids] of Object.entries(PANEL_DEFAULTS)) {
       for (const id of ids) {
@@ -148,7 +149,7 @@ export default class MagpieRoute extends View {
   syncRouteFocus(cx) {
     const keys = new Set();
     for (const id of this.trace.routes.keys()) {
-      const key = `route-${encodeURIComponent(String(id))}`;
+      const key = routeFocusKey(id);
       keys.add(key);
       if (!this.focusHandles.has(key)) this.focusHandles.set(key, cx.focus_handle());
     }
@@ -362,7 +363,10 @@ export default class MagpieRoute extends View {
         const sessionChanged = this.session !== binding.session;
         if (sessionChanged) {
           this.selectedId = null;
-          if (this.scope === "session") this.resetAccounting();
+          if (this.scope === "session") {
+            this.pinnedRouteId = null;
+            this.resetAccounting();
+          }
         }
         this.session = binding.session;
         this.reason = reason;
@@ -371,7 +375,10 @@ export default class MagpieRoute extends View {
       } catch (error) {
         if (job.source !== this.source || job.generation !== this.bindingGeneration || !this.visible || this.closed) return;
         this.session = null;
-        if (this.scope === "session") this.resetAccounting();
+        if (this.scope === "session") {
+          this.pinnedRouteId = null;
+          this.resetAccounting();
+        }
         this.selectedId = null;
         this.reason = { key: "system.bindingFailed", values: { error: failure(error) } };
         cx.notify();
@@ -396,11 +403,15 @@ export default class MagpieRoute extends View {
         const next = await readTrace(job.source, this.trace);
         if (job.source !== this.source || job.generation !== this.streamGeneration || !this.visible || this.closed) return;
         const changed = this.connection !== "live" || next.pid !== this.trace.pid || next.seq !== this.trace.seq;
-        if (next.pid !== this.trace.pid) this.selectedId = null;
+        if (next.pid !== this.trace.pid) {
+          this.selectedId = null;
+          this.pinnedRouteId = null;
+        }
         // A history read may have completed while the trace request was in flight.
         this.trace = mergeClassifiers(next, this.trace.port === job.port ? this.trace.classifiers.values() : []);
         this.syncRouteFocus(cx);
         if (this.selectedId !== null && !next.routes.has(this.selectedId)) this.selectedId = null;
+        if (this.pinnedRouteId !== null && !next.routes.has(this.pinnedRouteId)) this.pinnedRouteId = null;
         this.connection = "live";
         this.error = null;
         this.traceRetryAt = 0;
@@ -469,8 +480,9 @@ export default class MagpieRoute extends View {
     if (!this.visible || this.closed || this.page !== "routing" || !key || this.classifierHistoryJob
       || this.classifierHistory?.key === key && (!this.classifierHistory.retryAt || Date.now() < this.classifierHistory.retryAt)) return;
     const routes = this.routes();
-    const route = routes.find(route => route.id === this.selectedId) ?? routes[0];
-    if (route?.classifier && !route.rule?.held && !route.rule?.waits) return;
+    const targetId = this.pinnedRouteId ?? this.selectedId;
+    const route = (targetId === null || targetId === undefined ? null : routes.find(route => route.id === targetId)) ?? routes[0];
+    if (route?.classifications.length) return;
     const job = { key, generation: this.streamGeneration, source: this.source, port: this.port,
       scope: this.scope, session: this.scope === "session" ? this.session : "", group: this.modelFilter };
     this.classifierHistoryJob = job;
@@ -831,12 +843,18 @@ export default class MagpieRoute extends View {
     cx.notify();
   }
 
+  toggleGraphPin(id, cx) {
+    this.pinnedRouteId = this.pinnedRouteId === id ? null : id;
+    cx.notify();
+  }
+
   toggleClassifier(cx) {
     this.classifierExpanded = !this.classifierExpanded;
     cx.notify();
   }
   // Reset pages when their filter changes; global history survives tab focus changes.
   resetRecent() {
+    this.pinnedRouteId = null;
     this.recentExpanded = false;
     this.recentPage = 0;
     this.recentPageCount = 1;

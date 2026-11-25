@@ -52,40 +52,30 @@ function observedState(route, attempt, index, length) {
 }
 
 function newest(a, b) {
-  const aId = Number(a.route.id);
-  const bId = Number(b.route.id);
-  if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) return bId - aId;
-  const time = compare(text(b.route.time), text(a.route.time));
+  const time = b.time - a.time;
   if (time) return time;
-  if (finite(a.route.seq) && finite(b.route.seq) && a.route.seq !== b.route.seq) return b.route.seq - a.route.seq;
-  return a.index - b.index;
+  const seq = (b.route.seq ?? -1) - (a.route.seq ?? -1);
+  return seq || a.index - b.index;
 }
 
-function hasActiveAttempt(route) {
-  if (!object(route) || !unfinished(route)) return false;
-  const attempts = list(route.tries);
-  return attempts.length > 0 && reportedAttemptState(attempts[attempts.length - 1]) === "working";
-}
+const agentId = route => route.agent ?? "";
+const sessionId = route => typeof route.session === "string" && route.session.trim() ? route.session : "";
 
-export function graphSelection(routes, selected = null) {
-  if (!object(selected) || hasActiveAttempt(selected)) return selected;
-  return list(routes).some(route => route !== selected && hasActiveAttempt(route)) ? null : selected;
-}
-
-function visibleRoutes(routes, selected) {
-  if (object(selected)) return [selected];
-  const ordered = list(routes).filter(object).map((route, index) => ({ route, index })).sort(newest);
-  const seenRequests = new Set();
+function visibleRoutes(routes, pinned) {
+  if (object(pinned)) return [pinned];
+  const ordered = list(routes).filter(object).map((route, index) => {
+    const session = sessionId(route);
+    return { route, index, time: Date.parse(route.time) || 0, live: unfinished(route),
+      session, key: tuple([agentId(route), session]) };
+  }).sort(newest);
+  // Unassigned requests can come from unrelated sessions.
+  const liveSessions = new Set(ordered.filter(entry => entry.live && entry.session).map(entry => entry.key));
   const recentSources = new Set();
   const visible = [];
-  for (const { route, index } of ordered) {
-    const request = route.id === null || route.id === undefined ? `index:${index}` : `id:${text(route.id)}`;
-    if (seenRequests.has(request)) continue;
-    seenRequests.add(request);
-    if (!unfinished(route)) {
-      const source = tuple([text(route.agent), text(route.session)]);
-      if (recentSources.has(source)) continue;
-      recentSources.add(source);
+  for (const { route, live, key } of ordered) {
+    if (!live) {
+      if (liveSessions.has(key) || recentSources.has(key)) continue;
+      recentSources.add(key);
     }
     visible.push(route);
   }
@@ -148,7 +138,7 @@ export function buildRoutingGraph(routes, selected = null) {
   let activeCount = 0;
 
   staged.forEach((route, routeIndex) => {
-    const agent = text(route.agent);
+    const agent = agentId(route);
     const sourceId = `source:${tuple([agent])}`;
     let source = sourceMap.get(sourceId);
     if (!source) {
@@ -157,7 +147,7 @@ export function buildRoutingGraph(routes, selected = null) {
       sourceMap.set(sourceId, source);
     }
     source.requestCount += 1;
-    const session = text(route.session);
+    const session = sessionId(route);
     if (session) {
       source._sessions.add(session);
       sessions.add(tuple([agent, session]));
@@ -181,9 +171,8 @@ export function buildRoutingGraph(routes, selected = null) {
       }
       record(target, observation, request);
       // Only an observed, currently active attempt proves this session uses the target.
-      if (observation.observed && observation.state === "active"
-        && typeof route.session === "string" && text(route.session)) {
-        target._sessions.set(tuple([agent, route.session]), { agent, id: route.session });
+      if (observation.observed && observation.state === "active" && session) {
+        target._sessions.set(tuple([agent, session]), { agent, id: session });
       }
       const edgeId = tuple([sourceId, targetId]);
       let edge = edgeMap.get(edgeId);
@@ -506,8 +495,8 @@ function renderCache(env) {
  * No JS animation timer, oscillation, or traffic on untried/completed edges.
  * Per-view cache retains only visible immutable paths/slots plus one fixed frame bank.
  */
-export function renderRoutingGraph(env, routes, selected = null) {
-  const graph = buildRoutingGraph(routes, graphSelection(routes, selected));
+export function renderRoutingGraph(env, routes, pinned = null, classifier = null, controls = null) {
+  const graph = buildRoutingGraph(routes, pinned);
   const cache = renderCache(env);
   const nextPaths = new Map();
   // Layout padding reduces the measured root; keep a 24px lane without overflowing it.
@@ -578,17 +567,17 @@ export function renderRoutingGraph(env, routes, selected = null) {
       responding, routing: env.msg("graph.status.routing", { count: graph.counts.live - graph.counts.active }),
     }) : responding : env.msg("graph.status.recent", { count: graph.counts.routes });
   const headingText = env.msg("graph.title");
-  const headingWidth = Math.min(Math.floor(width * 0.35), Math.ceil([...headingText]
-    .reduce((units, character) => units + (character.codePointAt(0) >= 0x2e80 ? 2 : 1), 0) * 13 * 0.6) + 2);
-  const heading = wrapped(headingText, headingWidth, 13);
-  const metadata = wrapped(status, width - headingWidth - 8, 11);
+  const metadata = wrapped(status, width - 2, 11);
   const empty = wrapped(env.msg("graph.empty"), width, 12);
   return v_flex().w_full().min_w(0).flex_none().p(12).gap(12).rounded(10)
     .border(1).border_color(env.t.border).bg(env.t.chrome)
-    .child(h_flex().w_full().min_w(0).h(Math.max(heading.lines * 16, metadata.lines * 14)).flex_none()
-      .items_center().justify_between().gap(8)
-      .child(div().w(headingWidth).flex_none().child(label(heading.value, env.t.foreground, 13, 16).font_semibold()))
-      .child(div().flex_1().min_w(0).child(label(metadata.value, env.t.muted, 11, 14))))
+    .child(h_flex().w_full().min_w(0).h(28).flex_none().items_center().gap(8)
+      .child(label(headingText, env.t.foreground, 13, 16).font_semibold().flex_1().truncate().tooltip(headingText))
+      .when(Boolean(controls), element => element.child(controls)))
+    .child(v_flex().w_full().min_w(0).h(28).flex_none().justify_center()
+      .child(label(metadata.lines <= 2 ? metadata.value : status, env.t.muted, 11, 14)
+        .when(metadata.lines > 2, element => element.truncate()).tooltip(status)))
+    .when(Boolean(classifier), element => element.child(classifier))
     .when(graph.counts.routes > 0, element => element.child(diagram))
     .when(graph.counts.routes === 0, element => element.child(div().w_full().h(48 + empty.lines * 15).flex_none().py(24)
       .child(label(empty.value, env.t.muted, 12, 15))));

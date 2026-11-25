@@ -1,5 +1,5 @@
 export const PANEL_DEFAULTS = Object.freeze({
-  routing: Object.freeze(["cache", "routing", "active", "quotas", "classifier", "recent"]),
+  routing: Object.freeze(["cache", "routing", "quotas", "recent"]),
   usage: Object.freeze(["summary", "models"]),
 });
 

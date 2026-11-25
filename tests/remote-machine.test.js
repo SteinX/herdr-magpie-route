@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createI18n } from "../mods/magpie-route/i18n.js";
+import { element } from "./native-view.js";
 
-// The production view imports native modules; all routing and transport code stays real.
-mock.module("gpui-kit", () => ({ View: class {} }));
-mock.module("../mods/magpie-route/route-view.js", () => ({ renderRouting: view => view }));
 const PORT = 43127;
 const SESSION = "shared-session";
 const realFetch = globalThis.fetch;
@@ -13,12 +12,13 @@ const realNow = Date.now;
 const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 const runtime = {};
 mock.module("herdr", () => Object.fromEntries([
-  "appHome", "exec", "focused", "home", "layout", "nextCommand", "panes", "readTextFile", "spaces", "terminals",
+  "appHome", "exec", "focused", "home", "layout", "nextCommand", "panes", "readTextFile", "spaces", "terminals", "theme",
 ].map(name => [name, (...args) => runtime[name](...args)])));
 
 const { createMachineSource } = await import("../mods/magpie-route/machine-source.js");
 const { default: MagpieRoute } = await import("../mods/magpie-route/main.js");
-const { readTrace } = await import("../mods/magpie-route/routing-data.js");
+const { readTrace, readUsage } = await import("../mods/magpie-route/routing-data.js");
+const { renderRouting } = await import("../mods/magpie-route/route-view.js");
 
 beforeEach(() => {
   const storage = new Map();
@@ -43,6 +43,159 @@ afterEach(() => {
   globalThis.fetch = realFetch;
   if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
   else delete globalThis.localStorage;
+});
+
+test("an unattributed usage row does not blank global or named model cache rates", async () => {
+  const data = { period: "all", calls: 2, input: 62, cache_read: 35, cache_write: 3, cache_unknown: 30, models: [
+    { provider: "provider", model: "model", calls: 1, input: 32, cache_read: 35, cache_write: 3 },
+    { provider: "provider", calls: 1, input: 30, cache_read: 0, cache_write: 0, cache_unknown: 30 },
+  ] };
+  const report = await readUsage({ request: async () => response(data) });
+  expect(report.overall).toMatchObject({ rate: 0.5, total: 70, cacheUnknown: 30 });
+  expect([...report.models.keys()]).toEqual([JSON.stringify(["provider", "model"])]);
+  expect(report.models.get(JSON.stringify(["provider", "model"])).rate).toBe(0.5);
+});
+
+test("cache rates combine separate usage rows for the same provider and model", async () => {
+  const models = [
+    { provider: "provider", model: "model", host: "first", calls: 1, input: 80, cache_read: 20, cache_write: 0 },
+    { provider: "provider", model: "model", host: "second", calls: 2, input: 90, cache_read: 10, cache_write: 0, cache_unknown: 80 },
+  ];
+  const data = { period: "all", calls: 3, input: 170, cache_read: 30, cache_write: 0, cache_unknown: 80, models };
+  const report = await readUsage({ request: async () => response(data) });
+  expect(report.models.get(JSON.stringify(["provider", "model"]))).toMatchObject({ rate: 0.25, total: 120, samples: 3 });
+});
+
+test("expanded classifier details show redacted answers that differ from the selected intent", () => {
+  const said = "Implement feature via https://example.test/details";
+  const route = { id: 1, done: true, state: "done", classifications: [
+    { group: "nested", classifier: { said, intent: "", sure: 0.3 } },
+    { group: "held", classifier: { said: "Implement feature", intent: "Review changes" } },
+    { group: "same", classifier: { said: "Review changes", intent: "Review changes" } },
+  ] };
+  const view = {
+    i18n: createI18n("en"), routes: () => [route], page: "routing", scope: "all",
+    panelOrder: () => ["routing"], classifierHistoryKey: () => null,
+    machineLabel: () => "Local", modelFilterOptions: () => ["all"],
+    focusHandles: Object.assign(new Map(), { get: () => ({ is_focused: () => false }) }),
+  };
+  runtime.theme = () => ({});
+  const previousWindow = globalThis.window;
+  globalThis.window = { paint_path: element };
+  try {
+    const collapsed = JSON.stringify(renderRouting(view));
+    expect(collapsed).toContain("No intent selected");
+    expect(collapsed).not.toContain("Implement feature");
+    const expanded = JSON.stringify(renderRouting({ ...view, classifierExpanded: true }));
+    expect(expanded).toContain("Implement feature via [Gateway address hidden]");
+    expect(expanded).toContain('"nodes":["Implement feature"]');
+    expect(expanded.split("Classifier answer")).toHaveLength(3);
+    expect(expanded).not.toContain(said);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+});
+
+test("old panel orders drop Active requests and Recent requests still prioritizes the in-flight model", () => {
+  runtime.theme = () => ({});
+  const released = [];
+  const cx = {
+    ...context(),
+    focus_handle: () => {
+      const handle = { is_focused: () => false, focus() {}, release: () => released.push(handle) };
+      return handle;
+    },
+  };
+  const live = { id: 1, model: "live-fallback", state: "working", done: false };
+  const finished = [4, 3, 2].map(id => ({ id, model: `finished-${id}`, state: "done", done: true }));
+  localStorage.setItem("panel-orders", JSON.stringify({ routing: ["recent", "active", "quotas", "cache", "routing"] }));
+  const view = new MagpieRoute();
+  view.init({}, cx);
+  view.scope = "all";
+  expect(view.panelOrder("routing")).toEqual(["recent", "quotas", "cache", "routing"]);
+  view.panelOrders.routing = view.panelOrder("routing").filter(id => id !== "routing");
+  view.trace = { ...view.trace, routes: new Map([...finished, live].map(route => [route.id, route])) };
+  view.syncRouteFocus(cx);
+
+  const preview = JSON.stringify(renderRouting(view));
+  expect(preview).not.toContain('"Active requests"');
+  const recentSection = preview.slice(preview.indexOf('"Recent requests"'));
+  expect(recentSection).toContain('"nodes":["live-fallback"]');
+  expect(recentSection.indexOf('"nodes":["live-fallback"]')).toBeLessThan(recentSection.indexOf('"nodes":["finished-4"]'));
+  expect(recentSection).not.toContain('"nodes":["finished-2"]');
+
+  view.recentExpanded = true;
+  const expanded = JSON.stringify(renderRouting(view));
+  expect(expanded).toContain('"nodes":["finished-2"]');
+
+  view.trace = { ...view.trace, routes: new Map([[4, finished[0]]]) };
+  view.syncRouteFocus(cx);
+  expect(released).toHaveLength(3);
+  expect([...view.focusHandles.keys()].filter(key => key.startsWith("route-"))).toEqual(["route-recent-4"]);
+});
+
+test("selecting a request keeps the overview live until the graph is explicitly locked", () => {
+  runtime.theme = () => ({});
+  const cx = { ...context(), focus_handle: () => ({ is_focused: () => false, focus() {}, release() {} }) };
+  const view = new MagpieRoute();
+  view.init({}, cx);
+  view.scope = "all";
+  view.panelOrders.routing = ["routing"];
+  const old = { id: 1, agent: "omp", session: "first", done: true, state: "done",
+    tries: [{ model: "finished-model", done: true, status: 200, state: "done" }] };
+  const live = { id: 2, agent: "omp", session: "second", done: false, state: "working",
+    tries: [{ model: "live-model", done: false, state: "working" }] };
+  view.trace.routes = new Map([[1, old], [2, live]]);
+  view.selectRoute(1, cx);
+
+  function findControl(node, label) {
+    if (!node || typeof node !== "object") return undefined;
+    if (node.props?.accessibility_label === label) return node;
+    for (const child of node.nodes ?? []) {
+      const match = findControl(child, label);
+      if (match) return match;
+    }
+  }
+  const eventCx = { ...cx, stop_propagation() {} };
+  const previousWindow = globalThis.window;
+  globalThis.window = { paint_path: element };
+  try {
+    const overview = renderRouting(view);
+    expect(JSON.stringify(overview)).toContain('"nodes":["live-model"]');
+    findControl(overview, "Lock request").props.on_click({}, eventCx);
+
+    view.selectRoute(2, cx);
+    view.trace.routes.set(3, { id: 3, agent: "omp", session: "third", done: false, state: "routing", tries: [] });
+    const pinned = renderRouting(view);
+    expect(JSON.stringify(pinned)).toContain('"nodes":["finished-model"]');
+    expect(JSON.stringify(pinned)).not.toContain('"nodes":["live-model"]');
+    findControl(pinned, "Back to overview").props.on_click({}, eventCx);
+    expect(JSON.stringify(renderRouting(view))).toContain('"nodes":["live-model"]');
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+});
+
+test("live trace and retained history preserve an explicit no-intent classifier answer", async () => {
+  const payload = routePayload("test");
+  Object.assign(payload.routes[0].rule.classified, { said: "none of these" });
+  delete payload.routes[0].rule.classified.score;
+  const trace = await readTrace({ port: PORT, request: async () => response(payload) });
+  expect(trace.routes.get(7).classifications[0].classifier).toMatchObject({ said: "none of these", score: null });
+  expect([...trace.classifiers.values()][0].classifications[0].classifier).toMatchObject({ said: "none of these", score: null });
+});
+
+test("nested-only classifier decisions reach live and retained request metadata", async () => {
+  const payload = routePayload("test");
+  const route = payload.routes[0];
+  delete route.rule.classified;
+  route.nested = [{ group: "adaptive", rule: { classified: { by: "test", effort: "high", score: 2, sure: 0.9, ms: 12 } } }];
+  const trace = await readTrace({ port: PORT, request: async () => response(payload) });
+  const expected = [{ group: "adaptive", classifier: { by: "test", effort: "high", score: 2, sure: 0.9, ms: 12 } }];
+  expect(trace.routes.get(7).classifications).toMatchObject(expected);
+  expect([...trace.classifiers.values()][0].classifications).toMatchObject(expected);
 });
 
 const response = data => ({ json: async () => data });
@@ -361,7 +514,8 @@ describe("view machine isolation", () => {
       session: SESSION, provider: "late-A", model: "model", in: 1, out: 1,
     }] })],
     ["classifier", "pollClassifierHistory", "classifierHistoryJob", () => ({ scope: "session", session: SESSION, group: "all", records: [{
-      id: 7, time: "2026-11-16T11:00:00Z", session: SESSION, group: "group/test", classifier: { by: "late-A", score: 1, sure: 1 },
+      id: 7, time: "2026-11-16T11:00:00Z", session: SESSION, group: "group/test",
+      classifications: [{ group: "group/test", classifier: { by: "late-A", score: 1, sure: 1 } }],
     }] })],
   ];
 
@@ -623,7 +777,7 @@ describe("automatic connection recovery", () => {
         if (!archiveAvailable) throw new Error("Archive disconnected");
         return { scope, session, group, records: [{
           id: 7, time: "2026-11-16T11:00:00Z", session: SESSION, group: "group/test",
-          classifier: { by: "archive", score: 1, sure: 1 },
+          classifications: [{ group: "group/test", classifier: { by: "archive", score: 1, sure: 1 } }],
         }] };
       },
     });

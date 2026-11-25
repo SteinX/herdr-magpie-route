@@ -108,11 +108,17 @@ def classifier_record(line, scope, session, group):
     route_group = group_of(route)
     if not owner or not route_group or scope == "session" and owner != session or group != "all" and route_group != group:
         return None
-    rule = route.get("rule")
-    if not isinstance(rule, dict) or rule.get("held") or rule.get("waits"):
-        return None
-    classified = rule.get("classified")
-    if not isinstance(classified, dict) or classified.get("error"):
+    classifications = []
+    nested = route.get("nested")
+    stages = [(route_group, route.get("rule"))]
+    if isinstance(nested, list):
+        stages.extend((text(entry.get("group")) or text(entry.get("name")), entry.get("rule"))
+                      for entry in nested if isinstance(entry, dict))
+    for stage_group, rule in stages:
+        metadata = classification_metadata(rule)
+        if metadata is not None:
+            classifications.append({"group": stage_group[:256], "classifier": metadata})
+    if not classifications:
         return None
     route_id = route.get("id")
     if not isinstance(route_id, int) or isinstance(route_id, bool) or not 0 <= route_id <= 9007199254740991:
@@ -121,8 +127,18 @@ def classifier_record(line, scope, session, group):
     stamp = datetime.fromisoformat(started.replace("Z", "+00:00")).timestamp()
     if not math.isfinite(stamp):
         return None
+    return stamp, {"id": route_id, "time": started, "session": owner, "group": route_group,
+                   "classifications": classifications}
+
+
+def classification_metadata(rule):
+    if not isinstance(rule, dict) or rule.get("held") or rule.get("waits"):
+        return None
+    classified = rule.get("classified")
+    if not isinstance(classified, dict) or classified.get("error"):
+        return None
     metadata = {key: text(classified.get(key))[:256] for key in (
-        "by", "intent", "after", "effort", "above", "fallback", "afterEffort"
+        "by", "intent", "said", "after", "effort", "above", "fallback", "afterEffort"
     )}
     intents = classified.get("intents")
     metadata["intents"] = [value[:256] for value in intents[:32] if isinstance(value, str)] if isinstance(intents, list) else []
@@ -130,7 +146,7 @@ def classifier_record(line, scope, session, group):
         value = classified.get(key)
         metadata[key] = value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= maximum else None
     metadata.update(cached=classified.get("cached") is True, failed=False)
-    return stamp, {"id": route_id, "time": started, "session": owner, "group": route_group, "classifier": metadata}
+    return metadata
 
 
 def collect(scope, session, group, result):

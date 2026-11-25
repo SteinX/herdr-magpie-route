@@ -1,52 +1,69 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { en, zhCN } from "../mods/magpie-route/locales/graph.js";
-
-function element() {
-  const node = { nodes: [], props: {} };
-  const proxy = new Proxy(node, { get(target, key) {
-    if (key in target) return target[key];
-    return (...args) => {
-      if (key === "child") node.nodes.push(args[0]);
-      else if (key === "children") node.nodes.push(...args[0]);
-      else if (key === "when") { if (args[0]) args[1](proxy); }
-      else node.props[key] = args.length ? args[0] : true;
-      return proxy;
-    };
-  } });
-  return proxy;
-}
-
-mock.module("gpui-kit", () => ({ View: class {}, div: element, image: element, svg: element, PathBuilder: { stroke: element } }));
-mock.module("gpui-base", () => ({ h_flex: element, v_flex: element }));
-const { buildRoutingGraph, graphSelection, renderRoutingGraph } = await import("../mods/magpie-route/routing-graph.js");
-
-const completed = {
-  id: 1, agent: "omp", session: "session", done: true, state: "done",
-  tries: [{ model: "model-a", done: true, status: 200, state: "done" }],
-};
-const active = {
-  id: 2, agent: "omp", session: "session", done: false, state: "working",
-  tries: [{ model: "model-b", done: false, state: "working" }],
-};
-
-test("a stale pinned route yields to other active traffic without losing selection", () => {
-  const routes = [completed, active];
-  expect(buildRoutingGraph(routes, completed).counts.active).toBe(0);
-
-  const effectiveSelection = graphSelection(routes, completed);
-  expect(effectiveSelection).toBeNull();
-  const overview = buildRoutingGraph(routes, effectiveSelection);
-  expect(overview.mode).toBe("overview");
-  expect(overview.counts.active).toBe(1);
-  expect(overview.targets.some(target => target.model === "model-b" && target.active)).toBe(true);
-
-  expect(graphSelection([active], active)).toBe(active);
-  expect(graphSelection([completed], completed)).toBe(completed);
-});
+import { element } from "./native-view.js";
+const { buildRoutingGraph, renderRoutingGraph } = await import("../mods/magpie-route/routing-graph.js");
 
 const workingRoute = (id, session, model = "shared-model", fields = {}) => ({
   id, agent: "omp", session, done: false, state: "working",
   tries: [{ provider: "provider", model, done: false, state: "working" }], ...fields,
+});
+
+const completedRoute = (id, session, model, time, fields = {}) => ({
+  id, agent: "omp", session, time, done: true, state: "done",
+  tries: [{ model, done: true, status: 200, state: "done" }], ...fields,
+});
+
+test("overview keeps all ongoing requests and only the newest completed route for idle sessions", () => {
+  const graph = buildRoutingGraph([
+    completedRoute(100, "session-a", "completed-with-active", "2026-11-25T09:04:00Z"),
+    workingRoute(1, "session-a", "older-active", { time: "2026-11-25T09:00:00Z" }),
+    completedRoute(101, "session-b", "older-completed", "2026-11-25T09:02:00Z"),
+    completedRoute(3, "session-b", "newest-completed", "2026-11-25T09:03:00Z"),
+    workingRoute(2, "session-a", "concurrent-active"),
+    workingRoute(4, "session-a", "unused", { tries: [] }),
+    workingRoute(5, "waiting-only", "unused", { tries: [] }),
+    completedRoute(102, "waiting-only", "completed-with-waiting", "2026-11-25T09:03:00Z"),
+    completedRoute(103, " session-a ", "distinct-exact-session", "2026-11-25T09:03:00Z"),
+    completedRoute(104, "session-a", "distinct-exact-agent", "2026-11-25T09:03:00Z", { agent: " omp " }),
+  ]);
+  expect(graph.counts).toMatchObject({ routes: 7, live: 4, recent: 3, active: 2, sessions: 5 });
+  expect(graph.targets.filter(target => target.observed).map(target => target.model).sort()).toEqual([
+    "concurrent-active", "distinct-exact-agent", "distinct-exact-session", "newest-completed", "older-active",
+  ]);
+  expect(graph.targets.find(target => target.kind === "unreported").states.waiting).toBe(2);
+});
+
+test("blank sessions keep unrelated ongoing requests and one recent completed route per agent", () => {
+  const graph = buildRoutingGraph([
+    workingRoute(9, "", "blank-active"),
+    completedRoute(10, "", "blank-completed", "2026-11-25T09:02:00Z"),
+    completedRoute(11, "  ", "older-blank-completed", "2026-11-25T09:01:00Z"),
+    completedRoute(12, "", "other-agent-completed", "2026-11-25T09:01:00Z", { agent: "codex" }),
+  ]);
+  expect(graph.counts).toMatchObject({ routes: 3, live: 1, recent: 2, sessions: 0 });
+  expect(graph.targets.map(target => target.model).sort()).toEqual(["blank-active", "blank-completed", "other-agent-completed"]);
+});
+
+test("explicit pin stays on the completed, awaiting fallback, or unattempted request as live traffic arrives", () => {
+  const completed = completedRoute(1, "session", "pinned-model");
+  const awaiting = workingRoute(1, "session", "unused", {
+    tries: [{ model: "pinned-model", done: true, state: "failed", status: 503 }],
+  });
+  const waiting = workingRoute(1, "session", "unused", { tries: [] });
+  const otherRoute = workingRoute(2, "session", "unrelated-live-model");
+  for (const [pinned, state, model] of [
+    [completed, "done", "pinned-model"], [awaiting, "failed", "pinned-model"], [waiting, "waiting", ""],
+  ]) {
+    const graph = buildRoutingGraph([otherRoute], pinned);
+    expect(graph.mode).toBe("pinned");
+    expect(graph.counts).toMatchObject({ routes: 1, active: 0 });
+    expect(graph.targets.map(target => [target.state, target.model])).toEqual([[state, model]]);
+    expect(graph.targets[0].awaitingCount).toBe(pinned === awaiting ? 1 : 0);
+    const root = renderGraph([otherRoute], undefined, en, 340, pinned);
+    expect(root.nodes[1].nodes[0].props.tooltip).toContain("Pinned");
+    expect(JSON.stringify(root)).not.toContain("unrelated-live-model");
+  }
+  expect(buildRoutingGraph([completed, otherRoute]).counts).toMatchObject({ routes: 1, active: 1 });
 });
 
 test("active model sessions deduplicate exact IDs across requests without merging distinct sessions", () => {
@@ -102,23 +119,61 @@ function descendants(node) {
   return typeof node === "object" && node !== null ? [node, ...node.nodes.flatMap(descendants)] : [];
 }
 
-function renderCards(routes, sessionTitles, messages = en, width = 420) {
+function renderGraph(routes, sessionTitles, messages = en, width = 420, pinned = null, classifier = null, controls = null) {
   const previousWindow = globalThis.window;
   globalThis.window = { paint_path: element };
   try {
-    const root = renderRoutingGraph({
+    return renderRoutingGraph({
       view: { sessionTitles }, width, t: {}, number: String,
       msg(key, values = {}) {
         const message = typeof messages[key] === "object"
           ? messages[key][values.count === 1 ? "one" : "other"] : messages[key];
         return message.replace(/\{(\w+)\}/g, (_, name) => String(values[name]));
       },
-    }, routes);
-    return descendants(root).filter(node => node.props.id?.startsWith("magpie-routing-target-"));
+    }, routes, pinned, classifier, controls);
   } finally {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
   }
+}
+
+const targetCards = root => descendants(root).filter(node => node.props.id?.startsWith("magpie-routing-target-"));
+
+function renderCards(routes, sessionTitles, messages = en, width = 420) {
+  return targetCards(renderGraph(routes, sessionTitles, messages, width));
+}
+
+for (const width of [340, 420]) {
+  test(`graph renders at natural height without nested scrolling at panel width ${width}`, () => {
+    const control = element().id("lock-request").h(28);
+    const collapsed = element().h(45).child("Collapsed classifier");
+    const expanded = element().h(380).child("Expanded classifier with all results");
+    const title = "A long session title that stays visible inside the natural graph";
+    const first = workingRoute(1, "first", "model-1");
+    const titles = new Map([["first", title]]);
+    const routes = [first, ...Array.from({ length: 5 }, (_, index) => workingRoute(index + 2,
+      `session-${index}`, `model-${index + 2}`)), workingRoute(8, "waiting", "unused", { tries: [] })];
+    const messages = { ...en, "graph.status.live": "Requests currently {responding}\nRequests still {routing}" };
+    const empty = renderGraph([], undefined, messages, width, null, collapsed, control);
+    const short = renderGraph([first], undefined, messages, width, null, collapsed, control);
+    const titled = renderGraph([first], titles, messages, width, null, collapsed, control);
+    const full = renderGraph(routes, titles, messages, width, null, expanded, control);
+
+    for (const [root, classifier] of [[empty, collapsed], [short, collapsed], [titled, collapsed], [full, expanded]]) {
+      const [heading, status, stage] = root.nodes;
+      expect(heading.props).toMatchObject({ h: 28, flex_none: true });
+      expect(status.props).toMatchObject({ h: 28, flex_none: true });
+      expect(heading.nodes[1]).toBe(control);
+      expect(stage).toBe(classifier);
+      expect(descendants(root).some(node => node.props.overflow_y_scrollbar || node.props.overflow_y_scroll)).toBe(false);
+    }
+    expect(empty.nodes[3].nodes[0].nodes[0].replace(/\s+/g, " ")).toBe(en["graph.empty"]);
+    expect(full.nodes[1].nodes[0].nodes[0]).toContain("\n");
+    expect(targetCards(titled)[0].props.h).toBe(targetCards(short)[0].props.h + 17);
+    expect(targetCards(titled)[0].props.tooltip).toContain(title);
+    expect(targetCards(full)).toHaveLength(7);
+    expect(full.nodes[3].props.h).toBeGreaterThan(288);
+  });
 }
 
 const sessionRows = card => card.nodes.filter(node => node?.props?.truncate);

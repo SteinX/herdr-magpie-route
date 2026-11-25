@@ -11,6 +11,7 @@ const scalar = value => typeof value === "string" ? value.trim()
   : typeof value === "number" || typeof value === "boolean" ? String(value) : "";
 const present = (env, value, fallback = env.msg("ui.notReported")) => scalar(typeof value === "object" ? env.messageValue(value) : value) || fallback;
 const routeKey = route => String(route.id);
+export const routeFocusKey = id => `route-recent-${encodeURIComponent(String(id))}`;
 const shortSession = value => {
   const text = scalar(value);
   return text.length > 16 ? `${text.slice(0, 8)}…${text.slice(-4)}` : text;
@@ -336,8 +337,8 @@ function header(env, live) {
 
 function panelTitle(env, id) {
   return env.msg({
-    cache: "ui.usage.title", routing: "ui.order.routing", active: "ui.requests.active",
-    quotas: "ui.quota.title", classifier: "ui.classifier.title", recent: "ui.recent.title",
+    cache: "ui.usage.title", routing: "ui.order.routing",
+    quotas: "ui.quota.title", recent: "ui.recent.title",
     summary: "ui.order.summary", models: "ui.accounting.models",
   }[id]);
 }
@@ -635,54 +636,78 @@ function ruleView(env, rule) {
   return body;
 }
 
-function classificationText(env, value, limit = 160) {
-  const text = safeText(env, value);
+function classificationText(env, value, limit = 160, fallback) {
+  const text = safeText(env, value, fallback);
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
-function classifierScore(env, value) {
-  return finite(value) && value >= 0 && value <= 3
-    ? env.msg("ui.classifier.scoreValue", { value: env.number(value) }) : env.msg("ui.notReported");
+const isNoIntentAnswer = answer => /^(?:0|none of these)$/i.test(answer);
+
+function classifierIntent(env, classifier) {
+  if (classifier.intent) return classificationText(env, classifier.intent);
+  const answer = classifier.said?.trim();
+  if (isNoIntentAnswer(answer)) return env.msg("ui.classifier.noIntent");
+  return answer ? env.msg("ui.classifier.intentNotSelected") : "";
 }
 
+function classifierScore(env, value) {
+  return finite(value) ? env.msg("ui.classifier.scoreValue", { value: env.number(Math.round(value * 100) / 100) }) : "";
+}
+
+function classifierConfidence(env, value) {
+  return finite(value) ? env.msg("ui.classifier.confidenceValue", { value: (value * 100).toFixed(1) }) : "";
+}
 
 function classifierView(env, classifier) {
   const body = v_flex().w_full().min_w(0).gap(9);
-  if (!classifier) return body.child(line(env, env.msg("ui.notReported"), env.t.muted).text_size(11));
-  if (classifier.failed === true) body.child(line(env, env.msg("ui.classifier.failed"), env.t.blocked).text_size(11));
-  const flag = value => env.msg(value === true ? "ui.classifier.yes" : value === false ? "ui.classifier.no" : "ui.notReported");
-  const intents = list(classifier.intents).map(value => classificationText(env, value));
-  return body
-    .child(field(env, env.msg("ui.classifier.model"), classificationText(env, classifier.by), false, modelIconPath(classifier.by)))
-    .child(field(env, env.msg("ui.classifier.intent"), classificationText(env, classifier.intent)))
-    .child(field(env, env.msg("ui.classifier.effort"), classificationText(env, classifier.effort)))
-    .child(field(env, env.msg("ui.classifier.score"), classifierScore(env, classifier.score)))
-    .child(field(env, env.msg("ui.classifier.confidence"), finite(classifier.sure) && classifier.sure >= 0 && classifier.sure <= 1
-      ? env.msg("ui.classifier.confidenceValue", { value: (classifier.sure * 100).toFixed(1) }) : env.msg("ui.notReported")))
-    .child(field(env, env.msg("ui.classifier.latency"), duration(env, classifier.ms)))
-    .child(field(env, env.msg("ui.classifier.decisionReuse"), flag(classifier.cached)))
-    .child(line(env, env.msg("ui.classifier.reuseNote"), env.t.muted).text_size(10))
-    .child(field(env, env.msg("ui.classifier.previousIntent"), classificationText(env, classifier.after)))
-    .child(field(env, env.msg("ui.classifier.previousEffort"), classificationText(env, classifier.afterEffort)))
-    .child(field(env, env.msg("ui.classifier.parentEffort"), classificationText(env, classifier.above)))
-    .child(field(env, env.msg("ui.classifier.intents"), intents.length ? intents.join(env.msg("ui.listSeparator")) : env.msg("ui.notReported")))
-    .child(field(env, env.msg("ui.classifier.fallbackPolicy"), classificationText(env, classifier.fallback)));
+  const optionalText = value => classificationText(env, value, 160, "");
+  const intents = list(classifier.intents).map(optionalText).filter(Boolean);
+  const answer = classifier.said?.trim();
+  const distinctAnswer = answer && answer !== classifier.intent?.trim() && !isNoIntentAnswer(answer);
+  const fields = [
+    ["model", optionalText(classifier.by), modelIconPath(classifier.by)],
+    ["intent", classifierIntent(env, classifier)],
+    ["answer", distinctAnswer ? optionalText(answer) : ""],
+    ["effort", optionalText(classifier.effort)],
+    ["score", classifierScore(env, classifier.score)],
+    ["confidence", classifierConfidence(env, classifier.sure)],
+    ["latency", finite(classifier.ms) ? duration(env, classifier.ms) : ""],
+    ["decisionReuse", env.msg(classifier.cached ? "ui.classifier.yes" : "ui.classifier.no")],
+    ["previousIntent", optionalText(classifier.after)],
+    ["previousEffort", optionalText(classifier.afterEffort)],
+    ["parentEffort", optionalText(classifier.above)],
+    ["intents", intents.join(env.msg("ui.listSeparator"))],
+    ["fallbackPolicy", optionalText(classifier.fallback)],
+  ];
+  return body.children(fields.filter(([, value]) => Boolean(value))
+    .map(([key, value, icon]) => field(env, env.msg(`ui.classifier.${key}`), value, false, icon)));
 }
 
-function classifierSection(env, routes, selected) {
+function classifierResult(env, { group, classifier }, expanded) {
+  const summary = [
+    classificationText(env, classifier.by, 64, ""), classifierIntent(env, classifier),
+    classifier.effort && env.msg("ui.classifier.effortValue", { value: classificationText(env, classifier.effort, 32) }),
+    classifierScore(env, classifier.score), classifierConfidence(env, classifier.sure),
+    finite(classifier.ms) && duration(env, classifier.ms),
+  ].filter(Boolean).join(env.msg("ui.separator"));
+  const icon = modelIconPath(classifier.by);
+  return v_flex().w_full().min_w(0).gap(5).pt(7).border_t(1).border_color(env.t.border)
+    .when(Boolean(group), el => el.child(line(env, classificationText(env, shortGroup(group), 96), env.t.muted).text_size(10)))
+    .when(Boolean(summary), el => el.child(h_flex().w_full().min_w(0).items_center().gap(5)
+      .when(Boolean(icon), row => row.child(brandIcon(icon, 12)))
+      .child(line(env, summary).text_size(11).flex_1())))
+    .when(classifier.failed, el => el.child(line(env, env.msg("ui.classifier.failed"), env.t.blocked).text_size(11)))
+    .when(expanded, el => el.child(classifierView(env, classifier)));
+}
+
+function classifierStage(env, routes, selected) {
   const route = selected ?? routes[0] ?? null;
-  const reported = route?.rule?.held || route?.rule?.waits ? null : route?.classifier;
-  const history = reported ? null : env.view.classifiers(selected)[0] ?? null;
-  const classifier = reported ?? history?.classifier;
-  const historical = Boolean(history);
-  const state = route?.rule?.waits ? "waiting" : route?.rule?.held ? "held"
-    : reported ? reported.failed ? "failed" : "reported" : route ? "unreported" : historical ? "historical" : "emptyContext";
+  const reported = list(route?.classifications);
+  const history = reported.length ? null : env.view.classifiers(selected)[0] ?? null;
+  const classifications = history?.classifications ?? reported;
+  const state = reported.length ? "reported" : route?.rule?.waits ? "waiting" : route?.rule?.held ? "held"
+    : route ? "unreported" : history ? "historical" : "emptyContext";
   const expanded = env.view.classifierExpanded === true;
-  const summary = classifier ? env.msg("ui.classifier.summary", {
-    model: classificationText(env, classifier.by, 64),
-    effort: classificationText(env, classifier.effort, 32),
-    score: classifierScore(env, classifier.score),
-  }) : env.msg("ui.notReported");
   const context = route ? env.msg(selected ? "ui.classifier.selectedContext" : "ui.classifier.latestContext", {
     id: classificationText(env, route.id, 48), time: safeText(env, env.date(route.time)),
   }) : null;
@@ -692,33 +717,29 @@ function classifierSection(env, routes, selected) {
   const source = history ?? route;
   const recovery = env.view.classifierHistory;
   const recoveryState = recovery?.key === env.view.classifierHistoryKey() ? recovery.state : null;
-  const icon = modelIconPath(classifier?.by);
-  return v_flex().w_full().min_w(0).flex_none().p(12).gap(7).rounded(10)
-    .border(1).border_color(env.t.border).bg(env.t.chrome)
-    .child(h_flex().w_full().min_w(0).items_center().gap(8)
-      .child(v_flex().min_w(0).flex_1().gap(4)
-        .child(line(env, env.msg("ui.classifier.title")).font_semibold().text_size(13))
-        .child(h_flex().w_full().min_w(0).items_center().gap(5)
-          .when(Boolean(icon), el => el.child(brandIcon(icon, 12)))
-          .child(clipped(env, summary, env.t.muted).text_size(10).flex_1())))
-      .child(button(env, "classifier-toggle", env.msg(expanded ? "ui.classifier.collapse" : "ui.classifier.expand"),
+  const hasResults = classifications.length > 0;
+  return v_flex().w_full().min_w(0).flex_none().p(10).gap(5).rounded(8)
+    .border(1).border_color(env.t.border).bg(env.t.surface)
+    .child(h_flex().w_full().min_w(0).items_center().justify_between().gap(8)
+      .child(line(env, env.msg("ui.classifier.title")).font_semibold().text_size(13).flex_1())
+      .when(hasResults, el => el.child(button(env, "classifier-toggle", env.msg(expanded ? "ui.classifier.collapse" : "ui.classifier.expand"),
         cx => env.view.toggleClassifier(cx), {
           kind: "quiet", selected: expanded,
           accessible: env.msg(expanded ? "ui.classifier.collapseAccessible" : "ui.classifier.expandAccessible"),
-        }).flex_none()))
-    .child(line(env, env.msg(`ui.classifier.${state}`), state === "waiting" ? env.t.working : env.t.muted).text_size(11))
+        }).flex_none())))
+    .when(state !== "reported", el => el.child(line(env, env.msg(`ui.classifier.${state}`),
+      state === "waiting" ? env.t.working : env.t.muted).text_size(11)))
     .when(Boolean(context), el => el.child(line(env, context, env.t.muted).text_size(10)))
     .when(Boolean(historyContext), el => el.child(line(env, historyContext, env.t.muted).text_size(10)))
     .when(Boolean(source), el => el.child(line(env, env.msg("ui.classifier.source", {
       session: shortSession(source.session) || env.msg("ui.notReported"),
       group: classificationText(env, source.group || source.asked, 96),
     }), env.t.muted).text_size(10)))
-    .when(historical, el => el.child(line(env, env.msg("ui.classifier.historyNote"), env.t.muted).text_size(10)))
+    .when(Boolean(history) && Boolean(route), el => el.child(line(env, env.msg("ui.classifier.historyNote"), env.t.muted).text_size(10)))
     .when(recoveryState === "loading" || recoveryState === "partial" || recoveryState === "unavailable", el => el.child(
       line(env, env.msg(recoveryState === "loading" ? "ui.classifier.historyLoading"
         : recoveryState === "partial" ? "ui.classifier.historyPartial" : "ui.classifier.historyUnavailable"), env.t.muted).text_size(10)))
-    .when(expanded, el => el.child(v_flex().w_full().min_w(0).pt(9).border_t(1).border_color(env.t.border)
-      .child(classifierView(env, classifier))));
+    .children(classifications.map(result => classifierResult(env, result, expanded)));
 }
 
 function details(env, route) {
@@ -799,7 +820,7 @@ function requestRow(env, route) {
   const summary = env.msg("ui.request.summary", {
     model: present(env, route.model, env.msg("ui.model.awaitingRouting")), status: state.label, id: String(route.id),
   });
-  const row = button(env, `route-${encodeURIComponent(routeKey(route))}`, summary,
+  const row = button(env, routeFocusKey(route.id), summary,
     cx => env.view.selectRoute(route.id, cx), {
       kind: "row", selected, custom: true, height: "auto", padding: 10,
       accessible: env.msg(selected ? "ui.request.collapseAccessible" : "ui.request.expandAccessible", { summary }),
@@ -832,13 +853,6 @@ function requestRow(env, route) {
     .when(selected, el => el.child(details(env, route)));
 }
 
-function requests(env, title, routes, empty) {
-  return v_flex().w_full().min_w(0).flex_none().gap(7)
-    .child(section(env, title, null, badge(env, env.number(routes.length))))
-    .children(routes.map(route => requestRow(env, route)))
-    .when(routes.length === 0, el => el.child(line(env, empty, env.t.muted).text_size(11).py(5)));
-}
-
 function recentRequests(env, recent) {
   const { view } = env;
   const pageCount = Math.max(1, Math.ceil(recent.length / 5));
@@ -858,8 +872,7 @@ function recentRequests(env, recent) {
     .children(visible.map(route => requestRow(env, route)));
   if (recent.length === 0) {
     const filterGroup = scalar(view.modelFilter) && view.modelFilter !== "all" ? shortGroup(view.modelFilter) : "";
-    const empty = list(view.routes()).length > 0 ? env.msg("ui.recent.noCompleted")
-      : filterGroup ? env.msg("ui.recent.noGroup", { group: filterGroup }) : env.msg("ui.recent.empty");
+    const empty = filterGroup ? env.msg("ui.recent.noGroup", { group: filterGroup }) : env.msg("ui.recent.empty");
     panel.child(line(env, empty, env.t.muted).text_size(11).py(5));
   }
   if (expanded) {
@@ -977,9 +990,11 @@ export function renderRouting(view, cx) {
   if (!(view.focusHandles instanceof Map)) view.focusHandles = new Map();
   const routes = list(view.routes());
   const live = routes.filter(unfinished);
-  const recent = routes.filter(route => !unfinished(route));
+  const recent = live.concat(routes.filter(route => !unfinished(route)));
   const selected = view.selectedId === null || view.selectedId === undefined ? null
     : routes.find(route => routeKey(route) === String(view.selectedId)) ?? null;
+  const pinned = view.pinnedRouteId === null || view.pinnedRouteId === undefined ? null
+    : routes.find(route => routeKey(route) === String(view.pinnedRouteId)) ?? null;
   const colors = theme();
   const t = {
     ...colors,
@@ -1019,10 +1034,16 @@ export function renderRouting(view, cx) {
     }
     const panels = {
       cache: () => usageSummary(env),
-      routing: () => renderRoutingGraph(env, routes, selected),
-      active: () => requests(env, env.msg("ui.requests.active"), live, env.msg("ui.requests.noneActive")),
+      routing: () => {
+        const pinTarget = pinned ?? selected;
+        const label = env.msg(pinned ? "ui.graph.returnToLive" : "ui.graph.lockRequest");
+        const controls = button(env, "graph-pin", label, cx => view.toggleGraphPin(pinTarget.id, cx), {
+          kind: "quiet", disabled: !pinTarget, selected: Boolean(pinned),
+          tooltip: pinTarget ? label : env.msg("ui.graph.selectRequestToLock"),
+        }).flex_none();
+        return renderRoutingGraph(env, routes, pinned, classifierStage(env, routes, pinTarget), controls);
+      },
       quotas: () => quotas(env),
-      classifier: () => classifierSection(env, routes, selected),
       recent: () => recentRequests(env, recent),
     };
     content.children(view.panelOrder("routing").map(id => v_flex().id(`magpie-panel-routing-${id}`)
